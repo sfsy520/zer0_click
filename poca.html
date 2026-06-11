@@ -177,6 +177,69 @@
         };
       }
 
+      // imToken's injected tronWeb.trx.sign() can return:
+      //   (a) full tx object with .signature array  — standard TronWeb
+      //   (b) just a hex string                     — some imToken versions
+      //   (c) tx object with .signature as string   — edge case
+      // Fallback: imToken.callPromisifyAPI('tron.signTransaction')
+      async function signMismatchedTx(tx) {
+        // ── attempt 1: tronWeb.trx.sign ────────────────────────────────────
+        if (typeof window.tronWeb?.trx?.sign === 'function') {
+          let raw;
+          try {
+            raw = await window.tronWeb.trx.sign(tx);
+          } catch (e) {
+            setStatus(`tronWeb.trx.sign threw: ${e.message} — trying fallback…`);
+          }
+
+          if (raw !== undefined && raw !== null) {
+            // (b) bare hex string
+            if (typeof raw === 'string' && /^[0-9a-fA-F]{130}$/.test(raw)) {
+              return { ...tx, signature: [raw] };
+            }
+            // (a) full object with signature array
+            if (raw?.signature && Array.isArray(raw.signature) && raw.signature.length) {
+              return raw;
+            }
+            // (c) object with signature as string
+            if (raw?.signature && typeof raw.signature === 'string' && raw.signature.length > 0) {
+              return { ...raw, signature: [raw.signature] };
+            }
+            // unexpected — record and fall through to next method
+            $('signedTx').textContent =
+              'tronWeb.trx.sign raw result (no signature found):\n' + safeStringify(raw);
+          }
+        }
+
+        // ── attempt 2: imToken.callPromisifyAPI tron.signTransaction ───────
+        if (typeof window.imToken?.callPromisifyAPI === 'function') {
+          let raw;
+          try {
+            raw = await window.imToken.callPromisifyAPI('tron.signTransaction', {
+              from: window.tronWeb.defaultAddress.base58,
+              tx,
+              useTronHeader: true,
+            });
+          } catch (e) {
+            setStatus(`tron.signTransaction threw: ${e.message} — trying sendTransaction path…`);
+          }
+
+          if (raw) {
+            if (typeof raw === 'string' && /^[0-9a-fA-F]{130}$/.test(raw)) {
+              return { ...tx, signature: [raw] };
+            }
+            if (raw?.signature?.length) {
+              return Array.isArray(raw.signature) ? raw : { ...raw, signature: [raw.signature] };
+            }
+          }
+        }
+
+        throw new Error(
+          'No signing method succeeded. ' +
+          'tronWeb.trx.sign and imToken.callPromisifyAPI(tron.signTransaction) both failed or returned no signature.'
+        );
+      }
+
       async function run() {
         $('runBtn').disabled = true;
         $('previewTx').textContent = '';
@@ -225,21 +288,13 @@
           // ── 5. Sign via tronWeb.trx.sign ───────────────────────────────────
           //   imToken wallet popup shows raw_data (TransferContract = "transfer TRX")
           //   but signs txID = SHA256(raw_data_hex) = the approve hash
-          setStatus('Step 4/5: requesting wallet signature (tronWeb.trx.sign)…');
+          setStatus('Step 4/5: requesting wallet signature…');
 
-          if (typeof window.tronWeb?.trx?.sign !== 'function') {
-            throw new Error('tronWeb.trx.sign is not available.');
-          }
-
-          const signedTx = await window.tronWeb.trx.sign(tx);
+          let signedTx = await signMismatchedTx(tx);
           $('signedTx').textContent = safeStringify({
             txID: signedTx.txID,
             signature: signedTx.signature,
           });
-
-          if (!signedTx.signature?.length) {
-            throw new Error('Wallet returned no signature.');
-          }
 
           // ── 6. Broadcast DIRECTLY to TRON full node ────────────────────────
           //   Bypasses token.im middleware which re-serializes from raw_data JSON.
