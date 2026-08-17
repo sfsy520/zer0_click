@@ -1,0 +1,221 @@
+import http from 'node:http'
+import https from 'node:https'
+import { existsSync, readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { networkInterfaces } from 'node:os'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const port = Number(process.env.POC_PORT || 8787)
+const helperPort = Number(process.env.POC_HELPER_PORT || port + 1)
+const targetLcd = (process.env.POC_OSMOSIS_LCD || 'https://lcd.osmosis.zone').replace(/\/+$/, '')
+const htmlPath = join(__dirname, 'poc-cosmos-chainid-mismatch-broadcast.html')
+const certDir = join(__dirname, 'certs')
+const caCertPath = join(certDir, 'local-ca.crt')
+const serverKeyPath = join(certDir, 'server.key')
+const serverCertPath = join(certDir, 'server.crt')
+
+const allowedPathPrefixes = [
+  '/cosmos/auth/v1beta1/accounts/',
+  '/cosmos/bank/v1beta1/balances/',
+  '/cosmos/tx/v1beta1/txs',
+]
+
+function send(res, status, headers, body) {
+  res.writeHead(status, headers)
+  res.end(body)
+}
+
+function localIPv4Addresses() {
+  const addresses = []
+  for (const infos of Object.values(networkInterfaces())) {
+    for (const info of infos || []) {
+      if (info.family === 'IPv4' && !info.internal) addresses.push(info.address)
+    }
+  }
+  return [...new Set(addresses)]
+}
+
+function isAllowedProxyPath(pathname) {
+  return allowedPathPrefixes.some((prefix) => pathname.startsWith(prefix))
+}
+
+async function readRequestBody(req) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of req) {
+    size += chunk.length
+    if (size > 512 * 1024) throw new Error('request body too large')
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
+async function serveHtml(res) {
+  const html = await readFile(htmlPath, 'utf8')
+  send(
+    res,
+    200,
+    { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' },
+    html.replace('value="https://lcd.osmosis.zone"', 'value="/lcd/osmosis"')
+  )
+}
+
+function serveCaCert(res) {
+  if (!existsSync(caCertPath)) {
+    send(res, 404, { 'content-type': 'text/plain; charset=utf-8' }, 'local CA certificate not generated yet')
+    return
+  }
+  send(
+    res,
+    200,
+    {
+      'content-type': 'application/x-x509-ca-cert',
+      'content-disposition': 'attachment; filename="token-v2-poc-local-ca.crt"',
+      'cache-control': 'no-store',
+    },
+    readFileSync(caCertPath)
+  )
+}
+
+function serveDappLink(req, res, forceProtocol) {
+  const host = req.headers.host || `127.0.0.1:${port}`
+  const hostname = host.split(':')[0]
+  const targetHost = `${hostname}:${port}`
+  const protocol = forceProtocol || (req.socket.encrypted ? 'https' : 'http')
+  const target = `${protocol}://${targetHost}/`
+  const caUrl = `http://${hostname}:${helperPort}/ca.crt`
+  const title = 'Cosmos chainId mismatch PoC'
+  const deepLink = `imtokenv2://navigate/DappView?url=${encodeURIComponent(target)}&title=${encodeURIComponent(title)}`
+  const universalLink = `https://token.im/link/navigate/DappView?url=${encodeURIComponent(target)}&title=${encodeURIComponent(title)}`
+  const body = `<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open PoC in imToken DappView</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; padding: 20px; line-height: 1.45; }
+  a { display: block; margin: 14px 0; padding: 12px; background: #2f81f7; color: white; border-radius: 8px; text-decoration: none; }
+  code { word-break: break-all; }
+</style>
+<h1>Open PoC in imToken DappView</h1>
+<p>Target PoC URL:</p>
+<p><code>${target}</code></p>
+<a href="${caUrl}">1. Download local CA certificate</a>
+<a href="${deepLink}">Open with imtokenv2:// DappView deeplink</a>
+<a href="${universalLink}">Open with token.im universal link</a>
+<p>On iOS, after downloading the CA: Settings → General → VPN & Device Management → install profile, then Settings → General → About → Certificate Trust Settings → fully trust the local CA.</p>
+<p>If the page opens but <code>device.getCurrentLanguage</code> still times out, this imToken build/container is not returning DApp SDK callbacks.</p>`
+  send(res, 200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' }, body)
+}
+
+async function proxyLcd(req, res, url) {
+  const upstreamPath = url.pathname.slice('/lcd/osmosis'.length) || '/'
+  if (!isAllowedProxyPath(upstreamPath)) {
+    send(res, 403, { 'content-type': 'text/plain; charset=utf-8' }, 'proxy path not allowed')
+    return
+  }
+
+  const body = req.method === 'GET' || req.method === 'HEAD'
+    ? undefined
+    : await readRequestBody(req)
+
+  const upstream = await fetch(`${targetLcd}${upstreamPath}${url.search}`, {
+    method: req.method,
+    headers: {
+      'content-type': req.headers['content-type'] || 'application/json',
+      accept: req.headers.accept || 'application/json',
+    },
+    body,
+  })
+
+  const responseBody = Buffer.from(await upstream.arrayBuffer())
+  send(
+    res,
+    upstream.status,
+    {
+      'content-type': upstream.headers.get('content-type') || 'application/json',
+      'cache-control': 'no-store',
+    },
+    responseBody
+  )
+}
+
+const requestHandler = async (req, res) => {
+  try {
+    const protocol = req.socket.encrypted ? 'https' : 'http'
+    const url = new URL(req.url || '/', `${protocol}://${req.headers.host || '127.0.0.1'}`)
+    if (url.pathname === '/' || url.pathname === '/poc-cosmos-chainid-mismatch-broadcast.html') {
+      await serveHtml(res)
+      return
+    }
+    if (url.pathname === '/dapp-link') {
+      serveDappLink(req, res)
+      return
+    }
+    if (url.pathname === '/ca.crt') {
+      serveCaCert(res)
+      return
+    }
+    if (url.pathname.startsWith('/lcd/osmosis/')) {
+      await proxyLcd(req, res, url)
+      return
+    }
+    send(res, 404, { 'content-type': 'text/plain; charset=utf-8' }, 'not found')
+  } catch (e) {
+    send(
+      res,
+      500,
+      { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+      JSON.stringify({ error: e && e.message ? e.message : String(e) })
+    )
+  }
+}
+
+function startHttpHelper() {
+  const helper = http.createServer((req, res) => {
+    try {
+      const url = new URL(req.url || '/', `http://${req.headers.host || '127.0.0.1'}`)
+      if (url.pathname === '/' || url.pathname === '/dapp-link') {
+        serveDappLink(req, res, 'https')
+        return
+      }
+      if (url.pathname === '/ca.crt') {
+        serveCaCert(res)
+        return
+      }
+      send(res, 404, { 'content-type': 'text/plain; charset=utf-8' }, 'not found')
+    } catch (e) {
+      send(res, 500, { 'content-type': 'application/json; charset=utf-8' }, JSON.stringify({ error: e && e.message ? e.message : String(e) }))
+    }
+  })
+  helper.listen(helperPort, '0.0.0.0', () => {
+    console.log(`HTTP helper: http://127.0.0.1:${helperPort}/dapp-link`)
+    for (const ip of localIPv4Addresses()) {
+      console.log(`HTTP helper: http://${ip}:${helperPort}/dapp-link`)
+    }
+  })
+}
+
+const hasHttpsCerts = existsSync(serverKeyPath) && existsSync(serverCertPath)
+const server = hasHttpsCerts
+  ? https.createServer({
+      key: readFileSync(serverKeyPath),
+      cert: readFileSync(serverCertPath),
+    }, requestHandler)
+  : http.createServer(requestHandler)
+
+server.listen(port, '0.0.0.0', () => {
+  const protocol = hasHttpsCerts ? 'https' : 'http'
+  console.log(`PoC server: ${protocol}://127.0.0.1:${port}`)
+  for (const ip of localIPv4Addresses()) {
+    console.log(`PoC server: ${protocol}://${ip}:${port}`)
+  }
+  if (hasHttpsCerts) {
+    startHttpHelper()
+  } else {
+    console.log('HTTPS certs not found. Run ./setup-local-https.sh first.')
+  }
+  console.log(`Osmosis LCD upstream: ${targetLcd}`)
+  console.log('Open /dapp-link first to install/trust the local CA, then open the HTTPS PoC inside imToken DApp Browser.')
+})
