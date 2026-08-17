@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Open Cosmos PoC in imToken</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #101318;
+      color: #eef3f8;
+    }
+    body {
+      margin: 0;
+      padding: 20px;
+    }
+    main {
+      max-width: 760px;
+      margin: 0 auto;
+    }
+    a, button {
+      display: block;
+      box-sizing: border-box;
+      width: 100%;
+      margin: 14px 0;
+      padding: 13px;
+      border: 0;
+      border-radius: 10px;
+      background: #2f81f7;
+      color: white;
+      text-align: center;
+      text-decoration: none;
+      font-size: 16px;
+      font-weight: 700;
+    }
+    a.secondary {
+      background: #303844;
+    }
+    code, pre {
+      word-break: break-all;
+      white-space: pre-wrap;
+      background: #0d1117;
+      border: 1px solid #30363d;
+      border-radius: 8px;
+      padding: 10px;
+      display: block;
+    }
+    p {
+      color: #b9c3cf;
+      line-height: 1.5;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Open Cosmos PoC in imToken</h1>
+  <p>这个页面是 GitHub Pages 静态入口，会根据当前 Pages 地址生成 imToken DAppView deeplink。</p>
+
+  <p>Target PoC URL:</p>
+  <code id="target"></code>
+
+  <a id="deeplink" href="#">Open with imtokenv2:// DAppView</a>
+  <a id="universal" class="secondary" href="#">Open with token.im universal link</a>
+  <a id="direct" class="secondary" href="#">Open target page directly</a>
+
+  <p>如果点击 deeplink 后进入 imToken，先点 PoC 页面里的 <code>0. Probe imToken bridge</code>；看到 <code>device.getCurrentLanguage returned</code> 后再继续。</p>
+
+  <p>Generated deeplink:</p>
+  <pre id="raw"></pre>
+</main>
+
+<script>
+  const title = 'Cosmos chainId mismatch PoC'
+  const params = new URLSearchParams(location.search)
+  const targetUrl = new URL(params.get('url') || './', location.href).href
+  const deepLink = `imtokenv2://navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+  const universalLink = `https://token.im/link/navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+
+  document.getElementById('target').textContent = targetUrl
+  document.getElementById('deeplink').href = deepLink
+  document.getElementById('universal').href = universalLink
+  document.getElementById('direct').href = targetUrl
+  document.getElementById('raw').textContent = deepLink
+</script>
+</body>
+</html>
