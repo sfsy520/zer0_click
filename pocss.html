@@ -1,0 +1,1074 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVM tokenFlow hides native value PoC</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0f141b;
+      --panel: #171d25;
+      --panel-2: #10161d;
+      --line: #324050;
+      --text: #edf3fa;
+      --muted: #aeb9c6;
+      --accent: #2f81f7;
+      --ok: #3fb950;
+      --warn: #d29922;
+      --bad: #ff7b72;
+      --green: #238636;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 18px;
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 8px 0;
+    }
+
+    section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      margin: 14px 0;
+      background: var(--panel);
+    }
+
+    .warn {
+      border-color: var(--warn);
+      background: #261b07;
+      color: #ffdf8a;
+    }
+
+    .danger-note {
+      border-color: #7f3434;
+      background: #2a1214;
+      color: #ffc9c5;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 10px;
+    }
+
+    label {
+      display: block;
+      margin: 10px 0 6px;
+      color: #d1d7e0;
+      font-size: 13px;
+    }
+
+    input, button, textarea, select {
+      width: 100%;
+      border: 1px solid #344254;
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 10px;
+      font-size: 15px;
+    }
+
+    textarea {
+      min-height: 170px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    button {
+      margin-top: 10px;
+      border: 0;
+      background: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #303844;
+    }
+
+    button.safe {
+      background: var(--green);
+    }
+
+    button.danger {
+      background: #da3633;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    pre {
+      margin: 0;
+      min-height: 150px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 12px;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      border-radius: 6px;
+      background: var(--panel-2);
+      padding: 2px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .92em;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #303844;
+      color: #d7dee8;
+      font-size: 12px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+
+    .badge.ok {
+      background: #1f6f3d;
+      color: #d7ffdf;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .summary-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 12px;
+    }
+
+    .summary-item strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #f3f6fb;
+    }
+
+    .summary-item span {
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .visible {
+      color: var(--ok);
+    }
+
+    .hidden {
+      color: var(--bad);
+    }
+
+    .actions, .launcher {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    a.button-link {
+      display: block;
+      width: 100%;
+      border-radius: 8px;
+      background: var(--green);
+      color: #fff;
+      padding: 10px;
+      text-align: center;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    a.button-link.secondary {
+      background: #303844;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>EVM ContractExecution tokenFlow hides native value PoC</h1>
+  <p>
+    本页复现“payable 合约调用带非零 <code>value</code>，但服务端返回非空
+    <code>tokenFlow</code> 后，主确认内容进入 <code>TokenFlowList</code>
+    而跳过本地唯一展示 native value 的 <code>ABIDetail</code> 分支”的场景。
+  </p>
+
+  <section class="warn">
+    默认使用官方 wrapped native 合约的 <code>deposit()</code>，例如 WETH。
+    这会把主币包装成同账户 wrapped token；不是第三方收款场景。请只用测试或小额账户。
+    建议先点“只签不广播”，确认页会真实弹出，但不会提交链上交易。
+  </section>
+
+  <section>
+    <h2>打开方式</h2>
+    <p>
+      在系统浏览器里先点入口跳进 imToken DAppView；已在 imToken 内打开时直接连接账户。
+    </p>
+    <div class="launcher">
+      <a id="openImToken" class="button-link" href="#">Open in imToken</a>
+      <a id="openUniversal" class="button-link secondary" href="#">Open through token.im</a>
+    </div>
+    <p id="environment" class="badge">环境检测中</p>
+  </section>
+
+  <section>
+    <h2>PoC 参数</h2>
+    <div class="grid">
+      <div>
+        <label for="preset">预设链 / 合约</label>
+        <select id="preset">
+          <option value="ethereum">Ethereum Mainnet / WETH deposit()</option>
+          <option value="bsc">BNB Smart Chain / WBNB deposit()</option>
+          <option value="polygon">Polygon / WMATIC deposit()</option>
+          <option value="arbitrum">Arbitrum One / WETH deposit()</option>
+        </select>
+      </div>
+      <div>
+        <label for="chainId">chainId</label>
+        <input id="chainId" value="1" inputmode="numeric">
+      </div>
+      <div>
+        <label for="chainIdHex">chainId hex</label>
+        <input id="chainIdHex" value="0x1" readonly>
+      </div>
+      <div>
+        <label for="from">from</label>
+        <input id="from" value="" placeholder="点击连接后自动填入 0x..." autocomplete="off">
+      </div>
+      <div>
+        <label for="to">payable 合约 / tx.to</label>
+        <input id="to" value="0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2" autocomplete="off">
+      </div>
+      <div>
+        <label for="method">calldata / deposit()</label>
+        <input id="method" value="0xd0e30db0" autocomplete="off">
+      </div>
+      <div>
+        <label for="nativeSymbol">Native symbol</label>
+        <input id="nativeSymbol" value="ETH">
+      </div>
+      <div>
+        <label for="wrappedSymbol">Wrapped token symbol</label>
+        <input id="wrappedSymbol" value="WETH">
+      </div>
+      <div>
+        <label for="valueWei">真实 tx.value wei</label>
+        <input id="valueWei" value="1000000000000" inputmode="numeric">
+      </div>
+      <div>
+        <label for="valueMode">tx.value 编码模式</label>
+        <select id="valueMode">
+          <option value="decimal">decimal wei string</option>
+          <option value="hex">0x hex quantity</option>
+        </select>
+      </div>
+      <div>
+        <label for="gas">gas / gasLimit</label>
+        <input id="gas" value="80000" inputmode="numeric">
+      </div>
+      <div>
+        <label for="gasPrice">gasPrice wei</label>
+        <input id="gasPrice" value="" placeholder="可手动清空让钱包估算" inputmode="numeric">
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="sdkProbe" class="secondary">0. 普通 SDK 回调探测</button>
+      <button id="connect" class="secondary">1. 连接 / 读取账户</button>
+      <button id="switchChain" class="secondary">2. 切换到当前预设链</button>
+      <button id="balance" class="secondary">3. 读取 native 余额</button>
+      <button id="build">4. 构造 payload + mock tokenFlow</button>
+      <button id="mockPreview" class="secondary">5. 请求本地 mock wallet.signPreview</button>
+      <button id="signOnly" class="safe">6. 真实确认页：只签不广播</button>
+      <button id="sendTx" class="danger">7. 真实确认页：签名并广播</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>复现观察点</h2>
+    <div class="summary">
+      <div class="summary-item">
+        <strong>主确认页可见分支</strong>
+        <span id="branch" class="visible">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>TokenFlow 摘要</strong>
+        <span id="visibleFlow">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>被跳过的本地 native value</strong>
+        <span id="hiddenValue" class="hidden">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>Raw-only warning</strong>
+        <span id="rawOnly">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>当前链 / 账户</strong>
+        <span id="currentAccount">尚未读取</span>
+      </div>
+      <div class="summary-item">
+        <strong>签名 / 广播结果</strong>
+        <span id="txStatus">尚未发起</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="danger-note">
+    <h2>真实广播提示</h2>
+    <p>
+      “签名并广播”会调用 <code>eth_sendTransaction</code>，钱包确认后交易会上链。
+      默认金额为 <code>0.000001</code> native token，仍然是真资产支出。
+    </p>
+  </section>
+
+  <section>
+    <h2>完整交易 payload</h2>
+    <textarea id="payload" spellcheck="false"></textarea>
+  </section>
+
+  <section>
+    <h2>mock wallet.signPreview 响应</h2>
+    <textarea id="preview" spellcheck="false"></textarea>
+  </section>
+
+  <section>
+    <h2>签名/广播回执</h2>
+    <textarea id="receipt" spellcheck="false"></textarea>
+  </section>
+
+  <section>
+    <h2>日志</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id)
+  const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+  const NETWORKS = {
+    ethereum: {
+      chainId: '1',
+      chainName: 'Ethereum Mainnet',
+      nativeSymbol: 'ETH',
+      wrappedSymbol: 'WETH',
+      wrappedName: 'Wrapped Ether',
+      wrappedAddress: '0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2',
+      gasPrice: '1000000000',
+      rpcUrls: ['https://cloudflare-eth.com'],
+      blockExplorerUrls: ['https://etherscan.io'],
+    },
+    bsc: {
+      chainId: '56',
+      chainName: 'BNB Smart Chain',
+      nativeSymbol: 'BNB',
+      wrappedSymbol: 'WBNB',
+      wrappedName: 'Wrapped BNB',
+      wrappedAddress: '0xBB4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c',
+      gasPrice: '3000000000',
+      rpcUrls: ['https://bsc-dataseed.binance.org'],
+      blockExplorerUrls: ['https://bscscan.com'],
+    },
+    polygon: {
+      chainId: '137',
+      chainName: 'Polygon',
+      nativeSymbol: 'MATIC',
+      wrappedSymbol: 'WMATIC',
+      wrappedName: 'Wrapped Matic',
+      wrappedAddress: '0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270',
+      gasPrice: '30000000000',
+      rpcUrls: ['https://polygon-rpc.com'],
+      blockExplorerUrls: ['https://polygonscan.com'],
+    },
+    arbitrum: {
+      chainId: '42161',
+      chainName: 'Arbitrum One',
+      nativeSymbol: 'ETH',
+      wrappedSymbol: 'WETH',
+      wrappedName: 'Wrapped Ether',
+      wrappedAddress: '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1',
+      gasPrice: '100000000',
+      rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+      blockExplorerUrls: ['https://arbiscan.io'],
+    },
+  }
+
+  const state = {
+    account: '',
+    chainIdHex: '',
+    payload: null,
+    preview: null,
+    signedRaw: '',
+    txHash: '',
+  }
+
+  function setupLauncher() {
+    const title = 'EVM native value tokenFlow PoC'
+    const targetUrl = location.href.split('#')[0]
+    $('openImToken').href =
+      `imtokenv2://navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+    $('openUniversal').href =
+      `https://token.im/link/navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+  }
+
+  function safeJson(value) {
+    try {
+      return typeof value === 'string' ? JSON.parse(value) : value
+    } catch (_e) {
+      return value
+    }
+  }
+
+  function jsonReplacer(_key, value) {
+    if (typeof value === 'bigint') return value.toString()
+    if (value instanceof Uint8Array) return bytesToHex(value)
+    return value
+  }
+
+  function log(message, obj) {
+    const extra = obj === undefined ? '' : `\n${JSON.stringify(obj, jsonReplacer, 2)}`
+    $('log').textContent = `${new Date().toISOString()} ${message}${extra}\n\n${$('log').textContent}`
+  }
+
+  function environmentInfo() {
+    return {
+      href: location.href,
+      protocol: location.protocol,
+      userAgent: navigator.userAgent,
+      hasWindowEthereum: !!window.ethereum,
+      hasEthereumRequest: !!(window.ethereum && window.ethereum.request),
+      hasWindowWeb3: !!window.web3,
+      hasWindowImToken: !!window.imToken,
+      hasCallPromisifyAPI: !!(window.imToken && window.imToken.callPromisifyAPI),
+      hasReactNativeWebView: !!window.ReactNativeWebView,
+      selectedAddress: window.ethereum && window.ethereum.selectedAddress,
+      providerChainId: window.ethereum && window.ethereum.chainId,
+    }
+  }
+
+  function refreshEnvironment() {
+    const info = environmentInfo()
+    const ok = info.hasEthereumRequest || info.hasCallPromisifyAPI
+    $('environment').textContent = ok
+      ? `已检测到 EVM Provider${info.providerChainId ? `，chainId=${info.providerChainId}` : ''}`
+      : '普通浏览器模式'
+    $('environment').className = `badge ${ok ? 'ok' : ''}`
+  }
+
+  function installBridgeDebugHooks() {
+    if (!window.imToken || window.__evmNativeValueBridgeDebugInstalled) return
+
+    if (typeof window.imToken.postMessage === 'function') {
+      const originalPostMessage = window.imToken.postMessage.bind(window.imToken)
+      window.imToken.postMessage = function (content) {
+        log('imToken.postMessage 发出', safeJson(content))
+        return originalPostMessage(content)
+      }
+    }
+
+    if (typeof window.imToken._handleApiCallback === 'function') {
+      const originalCallback = window.imToken._handleApiCallback.bind(window.imToken)
+      window.imToken._handleApiCallback = function (data) {
+        log('native callback 收到', data)
+        return originalCallback(data)
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      const data = safeJson(event.data)
+      if (data && data.apiName && data.messageId) {
+        log('window.message 收到 SDK payload', { data, origin: event.origin })
+      }
+    })
+
+    window.__evmNativeValueBridgeDebugInstalled = true
+  }
+
+  function decimalToHex(value) {
+    const next = BigInt(String(value || '0'))
+    if (next < 0n) throw new Error('不支持负数')
+    return `0x${next.toString(16)}`
+  }
+
+  function hexToDecimal(value) {
+    if (!value) return '0'
+    return BigInt(String(value).toLowerCase()).toString(10)
+  }
+
+  function isHexQuantity(value) {
+    return /^0x[0-9a-f]+$/i.test(String(value || ''))
+  }
+
+  function strip0x(value) {
+    return String(value || '').replace(/^0x/i, '')
+  }
+
+  function normalizeHex(value) {
+    return `0x${strip0x(value).toLowerCase()}`
+  }
+
+  function parseChainId(value) {
+    if (isHexQuantity(value)) return BigInt(value).toString(10)
+    return String(value || '').trim()
+  }
+
+  function formatNativeAmount(wei) {
+    const raw = BigInt(String(wei || '0'))
+    const base = 1000000000000000000n
+    const whole = raw / base
+    const fraction = String(raw % base).padStart(18, '0').replace(/0+$/, '')
+    return fraction ? `${whole}.${fraction}` : String(whole)
+  }
+
+  function assertAddress(id) {
+    const value = $(id).value.trim()
+    if (!/^0x[0-9a-fA-F]{40}$/.test(value)) {
+      throw new Error(`${id} 必须是 0x 开头的 20 字节 EVM 地址`)
+    }
+    return value
+  }
+
+  function assertHexData(id) {
+    const value = $(id).value.trim()
+    if (!/^0x([0-9a-fA-F]{2})*$/.test(value)) {
+      throw new Error(`${id} 必须是 0x 开头的偶数字节 calldata`)
+    }
+    return normalizeHex(value)
+  }
+
+  function assertUintField(id) {
+    const value = $(id).value.trim()
+    if (!/^[0-9]+$/.test(value)) {
+      throw new Error(`${id} 必须是非负整数`)
+    }
+    return value
+  }
+
+  function buildTxPayload() {
+    const valueWei = assertUintField('valueWei')
+    const gas = $('gas').value.trim()
+    const gasPrice = $('gasPrice').value.trim()
+    const tx = {
+      from: $('from').value.trim() || ZERO_ADDRESS,
+      to: assertAddress('to'),
+      value: $('valueMode').value === 'hex' ? decimalToHex(valueWei) : valueWei,
+      data: assertHexData('method'),
+      chainId: decimalToHex(assertUintField('chainId')),
+      gas: gas ? assertUintField('gas') : undefined,
+      gasPrice: gasPrice ? assertUintField('gasPrice') : undefined,
+    }
+    Object.keys(tx).forEach((key) => tx[key] === undefined && delete tx[key])
+    return tx
+  }
+
+  function buildSignPreviewRequest(tx) {
+    const valueWei = $('valueMode').value === 'hex' ? hexToDecimal(tx.value) : String(tx.value)
+    return [
+      {
+        caip2: `eip155:${parseChainId(tx.chainId)}`,
+        signType: 'SignTransaction',
+        signData: {
+          from: tx.from,
+          to: tx.to,
+          value: decimalToHex(valueWei),
+          data: tx.data,
+        },
+        context: {
+          source: 'dapp',
+          url: location.origin,
+          timestamp: Date.now(),
+        },
+      },
+    ]
+  }
+
+  function buildMockPreview(tx) {
+    const wrappedAddress = normalizeHex($('to').value)
+    const valueWei = $('valueWei').value.trim()
+    return {
+      tokenFlow: [
+        {
+          counterparty: tx.from,
+          direction: 'IN',
+          value: valueWei,
+          amount: valueWei,
+          token: wrappedAddress,
+        },
+      ],
+      addressInfos: {
+        [wrappedAddress]: {
+          addressType: 'ERC20',
+          name: $('wrappedSymbol').value.trim(),
+          logo: '',
+          addressExtraInfo: {
+            decimals: 18,
+            symbol: $('wrappedSymbol').value.trim(),
+          },
+        },
+        [normalizeHex(tx.to)]: {
+          addressType: 'ERC20',
+          name: $('wrappedSymbol').value.trim(),
+          logo: '',
+          addressExtraInfo: {
+            decimals: 18,
+            symbol: $('wrappedSymbol').value.trim(),
+          },
+        },
+      },
+      signInfo: {
+        txType: 'WRAP',
+        humanReadableAbi: {
+          name: 'deposit',
+          data: [
+            { name: 'method', type: 'function', value: 'deposit()' },
+          ],
+        },
+      },
+    }
+  }
+
+  function updatePreviewModel() {
+    const tx = buildTxPayload()
+    const preview = buildMockPreview(tx)
+    const signPreviewRequest = buildSignPreviewRequest(tx)
+    const hasDisplayTokenFlow = preview.tokenFlow.length > 0
+    const hasHumanReadableAbi = !!(preview.signInfo && preview.signInfo.humanReadableAbi)
+    const showRawData = !hasDisplayTokenFlow && !hasHumanReadableAbi
+    state.payload = tx
+    state.preview = preview
+    $('payload').value = JSON.stringify({
+      ethRequest: {
+        method: 'eth_sendTransaction',
+        params: [tx],
+      },
+      legacySignOnlyApi: {
+        apiName: 'ethereum.signTransaction',
+        payload: tx,
+      },
+      signPreviewRequestModeledFromSource: signPreviewRequest,
+    }, null, 2)
+    $('preview').value = JSON.stringify(preview, null, 2)
+    $('branch').textContent = hasDisplayTokenFlow
+      ? 'TokenFlowList：ABIDetail(value) 不会作为主内容渲染'
+      : 'ABIDetail：会渲染本地 native value'
+    $('visibleFlow').textContent =
+      `IN ${formatNativeAmount($('valueWei').value)} ${$('wrappedSymbol').value.trim()}`
+    $('hiddenValue').textContent =
+      `tx.value=${tx.value}，即 OUT ${formatNativeAmount($('valueWei').value)} ${$('nativeSymbol').value.trim()}`
+    $('rawOnly').textContent = showRawData ? '显示' : '不显示'
+    log('已构造真实 DApp payload，并用本地 mock 响应复刻源码分支', {
+      primaryPreviewBranch: hasDisplayTokenFlow ? 'TokenFlowList' : 'ABIDetail',
+      rawOnlyWarningShown: showRawData,
+      hasHumanReadableAbi,
+      localNativeValueOnlyInABIDetail: true,
+      finalEthTxInputKeepsValue: tx.value,
+      tx,
+      mockSignPreview: preview,
+      signPreviewRequest,
+    })
+    return { tx, preview }
+  }
+
+  async function callImToken(apiName, payload, timeoutMs = 15000) {
+    installBridgeDebugHooks()
+    if (!window.imToken || typeof window.imToken.callPromisifyAPI !== 'function') {
+      throw new Error(`未检测到 window.imToken.callPromisifyAPI，无法调用 ${apiName}`)
+    }
+    const promise = window.imToken.callPromisifyAPI(apiName, payload)
+    return withTimeout(promise, apiName, timeoutMs)
+  }
+
+  async function requestEthereum(method, params = [], timeoutMs = 30000) {
+    installBridgeDebugHooks()
+    const payload = {
+      jsonrpc: '2.0',
+      id: Date.now(),
+      method,
+      params,
+    }
+    log(`EVM provider request: ${method}`, payload)
+    if (window.ethereum && typeof window.ethereum.request === 'function') {
+      return withTimeout(window.ethereum.request({ method, params }), method, timeoutMs)
+    }
+    if (window.imToken && typeof window.imToken.callPromisifyAPI === 'function') {
+      const response = await callImToken('ethereum.sendAsync', payload, timeoutMs)
+      if (response && response.error) throw new Error(response.error.message || JSON.stringify(response.error))
+      return response && Object.prototype.hasOwnProperty.call(response, 'result')
+        ? response.result
+        : response
+    }
+    throw new Error('未检测到 EVM provider，请在 imToken DApp 浏览器中打开本页')
+  }
+
+  function withTimeout(promise, label, ms) {
+    let timer
+    const timeout = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} 超时 ${ms / 1000}s`)), ms)
+    })
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+  }
+
+  async function probeSdkCallback() {
+    installBridgeDebugHooks()
+    refreshEnvironment()
+    log('普通 SDK 回调探测开始', environmentInfo())
+    const language = await callImToken('device.getCurrentLanguage', {}, 8000)
+    log('普通 SDK 回调探测成功', { language })
+  }
+
+  async function connectWallet() {
+    refreshEnvironment()
+    const accounts = await requestEthereum('eth_requestAccounts', [], 30000)
+    const first = Array.isArray(accounts) ? accounts[0] : accounts
+    if (first) {
+      state.account = first
+      $('from').value = first
+    }
+    state.chainIdHex = await requestEthereum('eth_chainId', [], 12000)
+    $('currentAccount').textContent = `${state.chainIdHex || 'unknown'} / ${$('from').value || 'unknown'}`
+    refreshEnvironment()
+    updatePreviewModel()
+    log('已读取当前 EVM 账户', { accounts, chainId: state.chainIdHex })
+  }
+
+  async function switchToPresetChain() {
+    const chainIdHex = decimalToHex(assertUintField('chainId'))
+    try {
+      await requestEthereum('wallet_switchEthereumChain', [{ chainId: chainIdHex }], 30000)
+    } catch (e) {
+      const preset = NETWORKS[$('preset').value]
+      if (!preset || preset.chainId === '1') throw e
+      log('wallet_switchEthereumChain 失败，尝试 wallet_addEthereumChain', { message: e.message })
+      await requestEthereum('wallet_addEthereumChain', [{
+        chainId: chainIdHex,
+        chainName: preset.chainName,
+        nativeCurrency: {
+          name: preset.nativeSymbol,
+          symbol: preset.nativeSymbol,
+          decimals: 18,
+        },
+        rpcUrls: preset.rpcUrls,
+        blockExplorerUrls: preset.blockExplorerUrls,
+      }], 30000)
+    }
+    state.chainIdHex = await requestEthereum('eth_chainId', [], 12000)
+    $('currentAccount').textContent = `${state.chainIdHex || 'unknown'} / ${$('from').value || 'unknown'}`
+    log('已切换/确认当前链', { chainId: state.chainIdHex })
+  }
+
+  async function readBalance() {
+    const address = $('from').value.trim()
+    if (!address) throw new Error('请先连接账户')
+    const balanceHex = await requestEthereum('eth_getBalance', [address, 'latest'], 15000)
+    const balanceWei = hexToDecimal(balanceHex)
+    $('currentAccount').textContent =
+      `${state.chainIdHex || window.ethereum && window.ethereum.chainId || 'unknown'} / ${address} / balance ${formatNativeAmount(balanceWei)} ${$('nativeSymbol').value.trim()}`
+    log('native 余额读取成功', {
+      address,
+      balanceHex,
+      balanceWei,
+      balance: `${formatNativeAmount(balanceWei)} ${$('nativeSymbol').value.trim()}`,
+    })
+  }
+
+  async function requestMockPreview() {
+    const { tx } = updatePreviewModel()
+    const response = await fetch('/mock-wallet-sign-preview', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ tx, preset: $('preset').value }),
+    })
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`)
+    $('preview').value = JSON.stringify(data, null, 2)
+    log('本地 mock wallet.signPreview 返回', data)
+  }
+
+  async function signTransactionOnly() {
+    if (!$('from').value.trim()) await connectWallet()
+    const { tx } = updatePreviewModel()
+    log('即将调用 ethereum.signTransaction。此路径只签名返回 raw tx，不广播', tx)
+    const signed = await callImToken('ethereum.signTransaction', tx, 90000)
+    state.signedRaw = typeof signed === 'string' ? signed : signed && (signed.sign || signed.raw || signed.rawTransaction || signed.signedTransaction) || ''
+    $('txStatus').textContent = state.signedRaw
+      ? `signed raw tx: ${state.signedRaw.slice(0, 18)}...`
+      : 'signTransaction returned'
+    const decoded = state.signedRaw ? decodeSignedTx(state.signedRaw) : null
+    $('receipt').value = JSON.stringify({ signed, decoded }, null, 2)
+    log('signTransaction 返回；如 decoded.valueWei 非 0，则签名材料仍携带 native value', { signed, decoded })
+  }
+
+  async function sendTransactionReal() {
+    if (!$('from').value.trim()) await connectWallet()
+    const { tx } = updatePreviewModel()
+    const confirmText = [
+      '即将调用 eth_sendTransaction 并真实广播。',
+      `chainId=${$('chainId').value.trim()} ${$('nativeSymbol').value.trim()}`,
+      `to=${tx.to}`,
+      `data=${tx.data}`,
+      `value=${tx.value} (${formatNativeAmount($('valueWei').value)} ${$('nativeSymbol').value.trim()})`,
+      '确认页如果只突出 tokenFlow 而没有清晰展示 native 支出，即命中本报告。'
+    ].join('\n')
+    if (!window.confirm(confirmText)) {
+      log('用户取消 eth_sendTransaction')
+      return
+    }
+    const txHash = await requestEthereum('eth_sendTransaction', [tx], 120000)
+    state.txHash = txHash
+    $('txStatus').textContent = `broadcast txHash=${txHash}`
+    const receipt = { txHash }
+    try {
+      receipt.transaction = await requestEthereum('eth_getTransactionByHash', [txHash], 20000)
+    } catch (e) {
+      receipt.lookupError = e.message
+    }
+    $('receipt').value = JSON.stringify(receipt, null, 2)
+    log('eth_sendTransaction 返回；transaction.value 可作为链上携带 native value 证据', receipt)
+  }
+
+  function applyPreset() {
+    const preset = NETWORKS[$('preset').value]
+    $('chainId').value = preset.chainId
+    $('chainIdHex').value = decimalToHex(preset.chainId)
+    $('to').value = preset.wrappedAddress
+    $('nativeSymbol').value = preset.nativeSymbol
+    $('wrappedSymbol').value = preset.wrappedSymbol
+    $('gasPrice').value = preset.gasPrice
+    updatePreviewModel()
+  }
+
+  function updateChainHex() {
+    try {
+      $('chainIdHex').value = decimalToHex(assertUintField('chainId'))
+    } catch (_e) {
+      $('chainIdHex').value = ''
+    }
+  }
+
+  function bytesToHex(bytes) {
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+
+  function hexToBytes(hex) {
+    const clean = strip0x(hex)
+    if (clean.length % 2 !== 0) throw new Error('invalid hex length')
+    const bytes = new Uint8Array(clean.length / 2)
+    for (let i = 0; i < clean.length; i += 2) {
+      bytes[i / 2] = parseInt(clean.slice(i, i + 2), 16)
+    }
+    return bytes
+  }
+
+  function readLength(bytes, offset, lengthOfLength) {
+    let length = 0
+    for (let i = 0; i < lengthOfLength; i += 1) {
+      length = (length * 256) + bytes[offset + i]
+    }
+    return length
+  }
+
+  function rlpDecodeAt(bytes, offset = 0) {
+    const prefix = bytes[offset]
+    if (prefix <= 0x7f) {
+      return { value: bytes.slice(offset, offset + 1), offset: offset + 1 }
+    }
+    if (prefix <= 0xb7) {
+      const length = prefix - 0x80
+      const start = offset + 1
+      return { value: bytes.slice(start, start + length), offset: start + length }
+    }
+    if (prefix <= 0xbf) {
+      const lengthOfLength = prefix - 0xb7
+      const length = readLength(bytes, offset + 1, lengthOfLength)
+      const start = offset + 1 + lengthOfLength
+      return { value: bytes.slice(start, start + length), offset: start + length }
+    }
+    if (prefix <= 0xf7) {
+      const length = prefix - 0xc0
+      const start = offset + 1
+      return decodeRlpList(bytes, start, start + length)
+    }
+    const lengthOfLength = prefix - 0xf7
+    const length = readLength(bytes, offset + 1, lengthOfLength)
+    const start = offset + 1 + lengthOfLength
+    return decodeRlpList(bytes, start, start + length)
+  }
+
+  function decodeRlpList(bytes, start, end) {
+    const list = []
+    let cursor = start
+    while (cursor < end) {
+      const decoded = rlpDecodeAt(bytes, cursor)
+      list.push(decoded.value)
+      cursor = decoded.offset
+    }
+    return { value: list, offset: end }
+  }
+
+  function rlpBytesToHex(value) {
+    if (!(value instanceof Uint8Array)) return ''
+    return value.length ? `0x${bytesToHex(value)}` : '0x'
+  }
+
+  function rlpBytesToDecimal(value) {
+    if (!(value instanceof Uint8Array) || value.length === 0) return '0'
+    return BigInt(`0x${bytesToHex(value)}`).toString(10)
+  }
+
+  function decodeSignedTx(rawTx) {
+    const bytes = hexToBytes(rawTx)
+    let type = 'legacy'
+    let body = bytes
+    if ((bytes[0] === 1 || bytes[0] === 2) && bytes[1] >= 0xc0) {
+      type = bytes[0] === 1 ? 'eip2930' : 'eip1559'
+      body = bytes.slice(1)
+    }
+    const decoded = rlpDecodeAt(body, 0).value
+    if (!Array.isArray(decoded)) throw new Error('signed tx is not an RLP list')
+    if (type === 'legacy') {
+      return {
+        type,
+        nonce: rlpBytesToDecimal(decoded[0]),
+        gasPrice: rlpBytesToDecimal(decoded[1]),
+        gasLimit: rlpBytesToDecimal(decoded[2]),
+        to: rlpBytesToHex(decoded[3]),
+        valueWei: rlpBytesToDecimal(decoded[4]),
+        valueNative: formatNativeAmount(rlpBytesToDecimal(decoded[4])),
+        data: rlpBytesToHex(decoded[5]),
+      }
+    }
+    if (type === 'eip2930') {
+      return {
+        type,
+        chainId: rlpBytesToDecimal(decoded[0]),
+        nonce: rlpBytesToDecimal(decoded[1]),
+        gasPrice: rlpBytesToDecimal(decoded[2]),
+        gasLimit: rlpBytesToDecimal(decoded[3]),
+        to: rlpBytesToHex(decoded[4]),
+        valueWei: rlpBytesToDecimal(decoded[5]),
+        valueNative: formatNativeAmount(rlpBytesToDecimal(decoded[5])),
+        data: rlpBytesToHex(decoded[6]),
+      }
+    }
+    return {
+      type,
+      chainId: rlpBytesToDecimal(decoded[0]),
+      nonce: rlpBytesToDecimal(decoded[1]),
+      maxPriorityFeePerGas: rlpBytesToDecimal(decoded[2]),
+      maxFeePerGas: rlpBytesToDecimal(decoded[3]),
+      gasLimit: rlpBytesToDecimal(decoded[4]),
+      to: rlpBytesToHex(decoded[5]),
+      valueWei: rlpBytesToDecimal(decoded[6]),
+      valueNative: formatNativeAmount(rlpBytesToDecimal(decoded[6])),
+      data: rlpBytesToHex(decoded[7]),
+    }
+  }
+
+  function bindEvents() {
+    $('sdkProbe').addEventListener('click', () => {
+      probeSdkCallback().catch((e) => log('普通 SDK 回调探测失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('connect').addEventListener('click', () => {
+      connectWallet().catch((e) => log('连接账户失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('switchChain').addEventListener('click', () => {
+      switchToPresetChain().catch((e) => log('切链失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('balance').addEventListener('click', () => {
+      readBalance().catch((e) => log('读取余额失败', { message: e.message }))
+    })
+    $('build').addEventListener('click', () => {
+      try {
+        updatePreviewModel()
+      } catch (e) {
+        log('构造 payload 失败', { message: e.message })
+      }
+    })
+    $('mockPreview').addEventListener('click', () => {
+      requestMockPreview().catch((e) => log('请求本地 mock wallet.signPreview 失败', { message: e.message }))
+    })
+    $('signOnly').addEventListener('click', () => {
+      signTransactionOnly().catch((e) => {
+        $('txStatus').textContent = `sign-only failed: ${e.message}`
+        log('signTransaction 失败', { message: e.message, environment: environmentInfo() })
+      })
+    })
+    $('sendTx').addEventListener('click', () => {
+      sendTransactionReal().catch((e) => {
+        $('txStatus').textContent = `broadcast failed: ${e.message}`
+        log('eth_sendTransaction 失败', { message: e.message, environment: environmentInfo() })
+      })
+    })
+    $('preset').addEventListener('change', applyPreset)
+    $('chainId').addEventListener('input', () => {
+      updateChainHex()
+      try { updatePreviewModel() } catch (_e) {}
+    })
+    ;[
+      'from',
+      'to',
+      'method',
+      'nativeSymbol',
+      'wrappedSymbol',
+      'valueWei',
+      'valueMode',
+      'gas',
+      'gasPrice',
+    ].forEach((id) => $(id).addEventListener('input', () => {
+      try { updatePreviewModel() } catch (_e) {}
+    }))
+  }
+
+  setupLauncher()
+  refreshEnvironment()
+  bindEvents()
+  applyPreset()
+  log('PoC ready。先在 imToken DApp 浏览器打开本页，再连接账户。', environmentInfo())
+</script>
+</body>
+</html>
